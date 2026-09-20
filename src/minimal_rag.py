@@ -1,15 +1,17 @@
 """
 minimal_rag.py — minimal end-to-end RAG demo (Lewis et al. 2020 style)
 
-Pipeline: load docs → chunk → embed (OpenAI text-embedding-3-small) →
-FAISS index → retrieve top-k → generate (GPT-4o-mini) → answer with sources.
+Pipeline: load docs -> chunk -> embed (ZhipuAI GLM Embedding-2) ->
+FAISS index -> retrieve top-k -> generate (DeepSeek Chat) -> answer with sources.
+
+Provider choice (2026-09-20):
+- Embedding: ZhipuAI embedding-2 (国内直连, 免费)
+- Chat: DeepSeek deepseek-chat (国内直连, 跟 OpenAI API 99% 兼容)
 
 Setup:
-    1. cp .env.example .env  (set OPENAI_API_KEY)
+    1. cp .env.example .env  (set DEEPSEEK_API_KEY + ZHIPU_API_KEY)
     2. Put some .txt files in data/raw/
     3. python src/minimal_rag.py
-
-Target: ~120 lines, no fancy config, easy to read end-to-end.
 """
 import os
 from pathlib import Path
@@ -17,16 +19,22 @@ from pathlib import Path
 from dotenv import load_dotenv
 from langchain_community.document_loaders import DirectoryLoader, TextLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_openai import OpenAIEmbeddings, ChatOpenAI
+from langchain_community.embeddings import ZhipuAIEmbeddings
 from langchain_community.vectorstores import FAISS
+from langchain_openai import ChatOpenAI
 from langchain.chains import RetrievalQA
 
 # --- config ---
 load_dotenv()
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-if not OPENAI_API_KEY:
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+ZHIPU_API_KEY = os.getenv("ZHIPU_API_KEY")
+if not DEEPSEEK_API_KEY:
     raise SystemExit(
-        "OPENAI_API_KEY not set. Copy .env.example to .env and paste your key."
+        "DEEPSEEK_API_KEY not set. Get one at https://platform.deepseek.com/"
+    )
+if not ZHIPU_API_KEY:
+    raise SystemExit(
+        "ZHIPU_API_KEY not set. Get one at https://bigmodel.cn/"
     )
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -34,8 +42,11 @@ DATA_DIR = ROOT / "data" / "raw"
 INDEX_DIR = ROOT / "data" / "embeddings"
 INDEX_DIR.mkdir(parents=True, exist_ok=True)
 
-EMBED_MODEL = "text-embedding-3-small"
-LLM_MODEL = "gpt-4o-mini"
+# Provider endpoints
+DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
+DEEPSEEK_CHAT_MODEL = "deepseek-chat"
+ZHIPU_EMBEDDING_MODEL = "embedding-2"
+
 CHUNK_SIZE = 500
 CHUNK_OVERLAP = 50
 TOP_K = 3
@@ -58,14 +69,20 @@ def build_index(docs):
         chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP,
     )
     chunks = splitter.split_documents(docs)
-    embeddings = OpenAIEmbeddings(model=EMBED_MODEL)
+    embeddings = ZhipuAIEmbeddings(
+        model=ZHIPU_EMBEDDING_MODEL,
+        api_key=ZHIPU_API_KEY,
+    )
     index = FAISS.from_documents(chunks, embeddings)
     index.save_local(str(INDEX_DIR))
     return index, len(chunks)
 
 
 def load_index():
-    embeddings = OpenAIEmbeddings(model=EMBED_MODEL)
+    embeddings = ZhipuAIEmbeddings(
+        model=ZHIPU_EMBEDDING_MODEL,
+        api_key=ZHIPU_API_KEY,
+    )
     return FAISS.load_local(
         str(INDEX_DIR), embeddings, allow_dangerous_deserialization=True
     )
@@ -73,7 +90,13 @@ def load_index():
 
 def make_qa(index):
     retriever = index.as_retriever(search_kwargs={"k": TOP_K})
-    llm = ChatOpenAI(model=LLM_MODEL, temperature=0)
+    llm = ChatOpenAI(
+        model=DEEPSEEK_CHAT_MODEL,
+        temperature=0,
+        base_url=DEEPSEEK_BASE_URL,
+        api_key=DEEPSEEK_API_KEY,
+        timeout=120,
+    )
     return RetrievalQA.from_chain_type(
         llm=llm,
         retriever=retriever,

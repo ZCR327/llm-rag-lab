@@ -8,9 +8,9 @@
 - [ ] Create GitHub repo `ZCR327/llm-rag-lab` (public, MIT license)
 - [ ] `python -m venv .venv` + activate it
 - [ ] `pip install -r requirements.txt`
-- [ ] Get an OpenAI API key at https://platform.openai.com/api-keys
-  (set up billing; pay-as-you-go, ~$5 minimum)
-- [ ] `cp .env.example .env` + paste key
+- [ ] Get a DeepSeek API key at https://platform.deepseek.com/ (国内直连, 免费额度够 demo)
+- [ ] Get a ZhipuAI API key at https://bigmodel.cn/ (国内直连, GLM Embedding-2 免费)
+- [ ] `cp .env.example .env` + paste both keys
 
 ## Session 2 (~2h, Sun morning)
 

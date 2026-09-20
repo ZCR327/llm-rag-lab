@@ -22,10 +22,15 @@ reading list.
 python -m venv .venv
 .venv\Scripts\activate          # Windows
 pip install -r requirements.txt
-cp .env.example .env           # then edit .env with OPENAI_API_KEY
+cp .env.example .env           # then edit .env with DEEPSEEK_API_KEY + ZHIPU_API_KEY
 # put some .txt files in data/raw/
 python src/minimal_rag.py
 ```
+
+Providers (both 国内直连, no VPN needed):
+
+- **Chat**: DeepSeek `deepseek-chat` via OpenAI-compat base_url — https://platform.deepseek.com/
+- **Embedding**: ZhipuAI GLM Embedding-2 — https://bigmodel.cn/
 
 ## Layout
 

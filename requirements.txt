@@ -15,6 +15,9 @@ tiktoken>=0.7.0
 pypdf>=4.0.0
 unstructured>=0.13.0
 
+# ZhipuAI (embedding)
+zhipuai>=2.0.0
+
 # Web UI (optional)
 flask>=3.0.0
 

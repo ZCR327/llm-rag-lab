@@ -6,6 +6,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-20
+
+### Changed
+- Provider swap: OpenAI (CN-blocked) -> DeepSeek chat + ZhipuAI embedding (both 国内直连)
+- `src/minimal_rag.py`: use DeepSeek `deepseek-chat` via OpenAI-compat base_url, ZhipuAI `embedding-2`
+- `.env.example`: dual key (`DEEPSEEK_API_KEY` + `ZHIPU_API_KEY`)
+- `requirements.txt`: add `zhipuai>=2.0.0`
+- `docs/WEEK1_TASKS.md`: updated setup steps for new providers
+
 ## [0.1.0] - 2026-09-20
 
 ### Added
