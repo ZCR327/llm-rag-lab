@@ -1,0 +1,31 @@
+# Core RAG framework
+langchain>=0.2.0
+langchain-community>=0.2.0
+langchain-openai>=0.1.0
+langchain-text-splitters>=0.2.0
+
+# Vector store (CPU)
+faiss-cpu>=1.8.0
+
+# LLM + tokenizer
+openai>=1.30.0
+tiktoken>=0.7.0
+
+# Document loaders
+pypdf>=4.0.0
+unstructured>=0.13.0
+
+# Web UI (optional)
+flask>=3.0.0
+
+# Config
+python-dotenv>=1.0.0
+
+# Eval + data
+pandas>=2.2.0
+numpy>=1.26.0
+
+# Dev (optional, comment in if needed)
+# pytest>=8.0.0
+# black>=24.0.0
+# ruff>=0.4.0
