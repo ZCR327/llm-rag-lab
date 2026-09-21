@@ -6,6 +6,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-09-21
+
+### Added
+- `scripts/run_local.ps1`: one-shot launcher (venv + pip + .env check + run demo) for Windows
+- Windows UTF-8 stdout fix in `minimal_rag.py` (avoids GBK errors on Chinese output)
+- logging instead of print for clearer debugging
+
+### Changed
+- `src/minimal_rag.py`: friendlier error messages (tells user which API key is missing + where to get it)
+
 ## [0.1.1] - 2026-09-20
 
 ### Changed

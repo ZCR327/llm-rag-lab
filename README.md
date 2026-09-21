@@ -18,6 +18,13 @@ reading list.
 
 ## Quick Start
 
+**Windows one-shot** (推荐):
+```powershell
+# 在 PowerShell 里:
+powershell -ExecutionPolicy Bypass -File .\scripts\run_local.ps1
+```
+
+**手动**:
 ```bash
 python -m venv .venv
 .venv\Scripts\activate          # Windows
