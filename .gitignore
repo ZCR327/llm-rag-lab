@@ -20,6 +20,11 @@ data/embeddings/
 *.npy
 *.npz
 
+# Local model weights (downloaded separately, not versioned)
+models/
+*.safetensors
+*.bin
+
 # Logs
 *.log
 logs/

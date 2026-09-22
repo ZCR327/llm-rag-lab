@@ -57,7 +57,7 @@ DATA_DIR = ROOT / "data" / "raw"
 INDEX_DIR = ROOT / "data" / "embeddings"
 INDEX_DIR.mkdir(parents=True, exist_ok=True)
 
-RERANKER_MODEL = "BAAI/bge-reranker-base"
+RERANKER_MODEL = str(ROOT / "models" / "bge-reranker-base")
 INITIAL_K = 10  # 初检多取
 FINAL_N = 3    # rerank 后保留
 
