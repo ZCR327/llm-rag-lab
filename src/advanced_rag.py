@@ -99,9 +99,44 @@ def build_or_load_index():
     splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
     chunks = splitter.split_documents(docs)
     log.info(f"分成 {len(chunks)} 个 chunk")
+
+    # 智谱 API 单次最多 6 个文本, 分批调用
+    BATCH_SIZE = 6
     embeddings = ZhipuAIEmbeddings(model="embedding-2", api_key=ZHIPU_API_KEY)
-    index = FAISS.from_documents(chunks, embeddings)
+    all_vectors = []
+    for i in range(0, len(chunks), BATCH_SIZE):
+        batch = chunks[i:i + BATCH_SIZE]
+        batch_texts = [c.page_content for c in batch]
+        log.info(f"  embedding batch {i // BATCH_SIZE + 1}/{(len(chunks) + BATCH_SIZE - 1) // BATCH_SIZE} ({len(batch)} chunks)")
+        batch_vectors = embeddings.embed_documents(batch_texts)
+        all_vectors.extend(batch_vectors)
+    log.info(f"完成 {len(all_vectors)} 个 embedding")
+
+    # 手动建 FAISS index
+    import faiss
+    import numpy as np
+    from langchain_community.docstore.in_memory import InMemoryDocstore
+    from uuid import uuid4
+
+    vectors_np = np.array(all_vectors, dtype=np.float32)
+    dim = vectors_np.shape[1]
+    faiss_index = faiss.IndexFlatL2(dim)
+    faiss_index.add(vectors_np)
+
+    # 准备 docstore (in-memory) - 同一个 UUID 列表用于 docstore 和 index_to_docstore_id
+    chunk_ids = [str(uuid4()) for _ in range(len(chunks))]
+    docstore = InMemoryDocstore({cid: doc for cid, doc in zip(chunk_ids, chunks)})
+    index_to_docstore_id = {i: cid for i, cid in enumerate(chunk_ids)}
+
+    from langchain_community.vectorstores.faiss import FAISS as FAISSClass
+    index = FAISSClass(
+        embedding_function=embeddings,
+        index=faiss_index,
+        docstore=docstore,
+        index_to_docstore_id=index_to_docstore_id,
+    )
     index.save_local(str(INDEX_DIR))
+    log.info(f"索引已保存, {len(docs)} 文档 → {len(chunks)} chunks")
     return index, len(docs), len(chunks)
 
 
