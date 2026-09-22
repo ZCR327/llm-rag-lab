@@ -31,11 +31,11 @@ if sys.platform == "win32":
 
 from dotenv import load_dotenv
 from langchain_community.document_loaders import DirectoryLoader, TextLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import ZhipuAIEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_openai import ChatOpenAI
-from langchain.chains import RetrievalQA
+from langchain_classic.chains import RetrievalQA
 
 # --- logging (more useful than print for debugging) ---
 logging.basicConfig(
@@ -77,7 +77,10 @@ def load_docs():
         log.error(f"先放几个 .txt 到 {DATA_DIR}")
         sys.exit(1)
     loader = DirectoryLoader(
-        str(DATA_DIR), glob="**/*.txt", loader_cls=TextLoader
+        str(DATA_DIR),
+        glob="**/*.txt",
+        loader_cls=TextLoader,
+        loader_kwargs={"encoding": "utf-8"},
     )
     return loader.load()
 
