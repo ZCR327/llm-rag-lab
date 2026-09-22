@@ -76,12 +76,15 @@ ANSWER_PROMPT = ChatPromptTemplate.from_messages([
 
 
 def build_or_load_index():
+    """Build or load index. Returns (index, n_docs, n_chunks)."""
     if (INDEX_DIR / "index.faiss").exists():
         log.info("加载已有 FAISS 索引...")
         embeddings = ZhipuAIEmbeddings(model="embedding-2", api_key=ZHIPU_API_KEY)
-        return FAISS.load_local(
+        index = FAISS.load_local(
             str(INDEX_DIR), embeddings, allow_dangerous_deserialization=True
         )
+        n_docs = len(list(DATA_DIR.iterdir()))
+        return index, n_docs, 0
     log.info("建新索引 (首次会慢)...")
     loader = DirectoryLoader(
         str(DATA_DIR),
@@ -96,7 +99,7 @@ def build_or_load_index():
     embeddings = ZhipuAIEmbeddings(model="embedding-2", api_key=ZHIPU_API_KEY)
     index = FAISS.from_documents(chunks, embeddings)
     index.save_local(str(INDEX_DIR))
-    return index
+    return index, len(docs), len(chunks)
 
 
 def make_query_rewriter():

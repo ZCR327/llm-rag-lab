@@ -110,6 +110,22 @@ def load_index():
     )
 
 
+def build_or_load_index():
+    """Build or load index. Returns (index, n_docs, n_chunks)."""
+    if (INDEX_DIR / "index.faiss").exists():
+        log.info("发现已有索引, 直接加载...")
+        index = load_index()
+        n_docs = len(list(DATA_DIR.iterdir()))
+        return index, n_docs, 0
+    log.info("建新索引...")
+    docs = load_docs()
+    log.info(f"加载 {len(docs)} 个文档")
+    index, n_chunks = build_index(docs)
+    n_docs = len(docs)
+    log.info(f"索引完成: {n_docs} 个文件 → {n_chunks} 个 chunk")
+    return index, n_docs, n_chunks
+
+
 def make_qa(index):
     retriever = index.as_retriever(search_kwargs={"k": TOP_K})
     llm = ChatOpenAI(
@@ -131,16 +147,7 @@ def main():
     log.info(f"索引目录: {INDEX_DIR}")
 
     # 1. Build or load index
-    if (INDEX_DIR / "index.faiss").exists():
-        log.info("发现已有索引, 直接加载...")
-        index = load_index()
-    else:
-        log.info("建新索引...")
-        docs = load_docs()
-        log.info(f"加载 {len(docs)} 个文档")
-        index, n_chunks = build_index(docs)
-        n_docs = len(list(DATA_DIR.iterdir()))
-        log.info(f"索引完成: {n_docs} 个文件 → {n_chunks} 个 chunk")
+    index, n_docs, n_chunks = build_or_load_index()
 
     # 2. Build QA chain
     qa = make_qa(index)
