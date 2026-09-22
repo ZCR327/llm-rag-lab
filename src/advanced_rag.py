@@ -69,7 +69,10 @@ QUERY_REWRITE_PROMPT = ChatPromptTemplate.from_messages([
 ])
 
 ANSWER_PROMPT = ChatPromptTemplate.from_messages([
-    ("system", "你是一个基于参考资料回答问题的助手. 如果资料不包含答案, 老实说不知道. "
+    ("system", "你是一个基于参考资料回答问题的助手. "
+               "**严格基于参考资料**回答. 如果资料里没有明确说某个事实, "
+               "必须老实说'不知道'或'资料未提供', "
+               "**绝对不要编造**未在资料中出现的物理原理、数字、原因、推导. "
                "回答简洁, 用中文."),
     ("human", "参考资料:\n{context}\n\n问题: {question}\n\n答案:"),
 ])
