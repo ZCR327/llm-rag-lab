@@ -149,8 +149,11 @@ class SACAgent:
         self.opt_q1 = optim.Adam(self.q1.parameters(), lr=LR_CRITIC)
         self.opt_q2 = optim.Adam(self.q2.parameters(), lr=LR_CRITIC)
 
-        # 自动 α 调优 (target_entropy = -|A|)
-        self.target_entropy = -float(num_actions)  # 离散动作常用 -|A|
+        # 自动 α 调优 (target_entropy = -log(|A|) ≈ -0.69)
+        # v0.1 用 -|A|=-2 让 α 衰减过快, 探索不足 → 策略 collapse
+        # v0.2 改 -log(|A|) 让熵目标更宽松, 保持探索
+        import numpy as _np
+        self.target_entropy = -_np.log(num_actions)
         self.log_alpha = torch.zeros(1, requires_grad=True)
         self.opt_alpha = optim.Adam([self.log_alpha], lr=LR_ALPHA)
 
@@ -183,14 +186,14 @@ class SACAgent:
 
         # ====== 1. 更新 Q1, Q2 ======
         with torch.no_grad():
-            # Next action + log_prob (target policy)
-            a_next, lp_next, _ = self.actor.sample(s_next)
-            q1_t = self.q1_target(s_next)
+            # 离散 SAC 关键 fix: V(s') = Σ_a π(a'|s') · min(Q1(s',a'), Q2(s',a'))
+            # 不再用 sampled a_next (高方差), 而是 full enumeration
+            logits_next = self.actor(s_next)
+            probs_next = F.softmax(logits_next, dim=-1)  # (B, num_actions)
+            q1_t = self.q1_target(s_next)  # (B, num_actions)
             q2_t = self.q2_target(s_next)
-            q_t_min = torch.min(q1_t, q2_t)  # Twin Q
-            # V(s') = E_a'[Q(s',a') - α·log π] = Σ_a' (π(a'|s')·(Q_min(s',a') - α·log π(a'|s')))
-            # = Q_min(s',a') - α·log π(a'|s')  (for sampled a_next)
-            v_next = q_t_min.gather(1, a_next.unsqueeze(1)).squeeze(1) - self.alpha * lp_next
+            q_min = torch.min(q1_t, q2_t)  # (B, num_actions)
+            v_next = (probs_next * q_min).sum(dim=-1)  # (B,) scalar V(s')
             target_q = r + GAMMA * (1.0 - done) * v_next
 
         q1_pred = self.q1(s).gather(1, a.unsqueeze(1)).squeeze(1)
@@ -209,7 +212,7 @@ class SACAgent:
         q1_a = self.q1(s).gather(1, a.unsqueeze(1)).squeeze(1)
         q2_a = self.q2(s).gather(1, a.unsqueeze(1)).squeeze(1)
         q_min = torch.min(q1_a, q2_a)
-        # J_π = E[α·log π - Q]
+        # J_π = E[α·log π - Q]  (与 V(s') 的 fix 配套, 这里只用当前 batch)
         actor_loss = (self.alpha.detach() * lp - q_min).mean()
         self.opt_actor.zero_grad(); actor_loss.backward(); self.opt_actor.step()
 
@@ -345,13 +348,14 @@ if __name__ == "__main__":
         args.episodes = 200
         START_STEPS = 500  # 快速测试少填 buffer
 
-    save = Path(__file__).resolve().parent.parent / "checkpoints" / "sac_cartpole.pt"
+    save = Path(__file__).resolve().parent.parent / "checkpoints" / "sac_v2_cartpole.pt"
     save.parent.mkdir(parents=True, exist_ok=True)
 
     print("=" * 60)
-    print(f"D4ML — SAC from scratch on {args.env}")
+    print(f"D4ML — SAC v0.2 (discrete V(s') fix) from scratch on {args.env}")
     print(f"  γ={GAMMA} τ={TAU} lr_actor={LR_ACTOR} lr_critic={LR_CRITIC}")
     print(f"  buffer={BUFFER_SIZE} batch={BATCH_SIZE} start_steps={START_STEPS}")
+    print("  v0.2 fix: V(s') = sum_a pi(a'|s') * min(Q1,Q2)  (full enumeration, no sampling bias)")
     print("=" * 60)
 
     agent = train(args.env, save_path=save, max_episodes=args.episodes)

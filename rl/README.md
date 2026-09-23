@@ -8,7 +8,7 @@ D4ML 课基础 RL 项目 - **DQN + Dueling DQN from scratch** on CartPole-v1 (Py
 |---|---|---|---|
 | **DQN v0.2** (tuned) | 800 ep / 7.5 min CPU | **avg=500.0** (min=500, max=500) | ✅ **SOLVED** |
 | **PPO v0.1** (tuned) | 1500 ep / 67s CPU | **avg=500.0** (min=500, max=500) | ✅ **SOLVED** |
-| **SAC v0.1** (new) | 600 ep / 37s CPU | avg=9.3 (min=8, max=11) | ❌ 未收敛 (需修) |
+| **SAC v0.2** (discrete V(s') fix) | 1000 ep / 58s CPU | avg=9.2 (saved best avg=24.4) | ❌ 未收敛 (Q 网络未学起) |
 | Dueling DQN v0.2 | 15 min (中断于 2000ep) | avg=167.4 (min=89, max=500) | ⚠️ 训练不够 |
 | DQN v0.1 (untuned) | 600 ep / 3 min CPU | avg=304.0 (eval 30ep) | ⚠️ 接近但不稳定 |
 
@@ -102,13 +102,14 @@ rl/
 │   ├── eval_dqn.py        # 独立评估 DQN/Dueling
 │   ├── ppo.py             # PPO from scratch (~310 行)
 │   ├── eval_ppo.py        # 独立评估 PPO
-│   ├── sac.py             # SAC from scratch (~310 行, 未收敛)
+│   ├── sac.py             # SAC v0.2 from scratch (~310 行, 未收敛)
 │   └── eval_sac.py        # 独立评估 SAC
 ├── checkpoints/
 │   ├── dqn_cartpole.pt           (170KB, ✅ SOLVED 500/500)
 │   ├── dqn_dueling_cartpole.pt   (140KB, 未收敛)
 │   ├── ppo_cartpole.pt           (140KB, ✅ SOLVED 500/500)
-│   └── sac_cartpole.pt           (140KB, ❌ 未收敛 ep 10 best)
+│   ├── sac_cartpole.pt           (140KB, v0.1 未收敛)
+│   └── sac_v2_cartpole.pt        (140KB, v0.2 V(s') fix, 仍未收敛)
 ├── logs/                  # (空, 预留)
 └── README.md
 ```
@@ -116,12 +117,26 @@ rl/
 ## 进阶方向 (后续)
 
 - [x] PPO (on-policy, 主流) - **1500 ep SOLVED 500/500** ✅
-- [x] SAC (off-policy, 最大熵) - v0.1 实现完成, **未收敛** (discrete SAC 估值 bug)
-- [ ] 修 SAC: 离散动作 sum over all actions V(s') = Σ_a π(a|s')·Q(s',a') 替代 sampled
+- [x] SAC v0.2 (V(s') full-sum fix + -log|A| entropy) - **未收敛** (Q 网络未学起, 跟 PPO/DQN 不同)
 - [ ] 串 FTC 路径规划 (Bézier + RL 决策)
 - [ ] 调 Dueling DQN 训练时长: 2000+ ep 收敛
 - [ ] 调 DQN EPS_DECAY 0.99 → 0.995 (防 catastrophic forgetting)
 - [ ] Target network 软更新 (Polyak averaging) 而非硬更新
+
+## SAC 调优失败诊断 (失败教训)
+
+跑了 v0.1 (sampled a_next) + v0.2 (full-sum V(s') + -log|A| entropy) 两次, **都不收敛** (eval ~9/500 = random).
+
+**可能 root cause** (未深究):
+1. Q1/Q2 都没学起来 — target 太依赖 actor + Q_target, actor 没学所以 Q_target 没信号, Q_target 没信号所以 actor 没法学, 鸡生蛋蛋生鸡
+2. 离散动作 SAC 难调 (continuous 简单因高斯可微)
+3. Twin Q 减少 overestimation 但也减缓学习
+4. START_STEPS=1000 + 600 ep × 12 步 = 7200 steps (但都随机, 没训练信号)
+5. Tau=0.005 软更新可能太慢 — CartPole 这种快收敛任务, 软更新跟不上
+
+**教训**: 离散 SAC 不 work 时, **优先用 Stable Baselines 3 跑 baseline 对比**, 不要纯自己写. SB3 内置 SAC 离散版 + 100+ ep CartPole 应该秒解.
+
+**课程应用**: D4ML 报告里把 SAC 写为 "**试了从零实现, 离散动作 SAC 有非平凡挑战, 改用 DQN/PPO 跑通**, 引用 SB3 替代方案". 诚实记录, 拿到"工程试错经验"分.
 
 ## 训练曲线 (PPO v0.1)
 
