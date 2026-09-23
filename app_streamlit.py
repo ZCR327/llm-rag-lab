@@ -17,6 +17,11 @@ if sys.platform == "win32":
     except Exception:
         pass
 
+# 把 src/ 加到 sys.path (Streamlit 不会自动加)
+SRC_DIR = Path(__file__).parent / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
 # 加载 .env (DEEPSEEK_API_KEY + ZHIPU_API_KEY)
 from dotenv import load_dotenv
 env_path = Path(__file__).parent / ".env"
