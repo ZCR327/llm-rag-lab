@@ -8,6 +8,7 @@ D4ML 课基础 RL 项目 - **DQN + Dueling DQN from scratch** on CartPole-v1 (Py
 |---|---|---|---|
 | **DQN v0.2** (tuned) | 800 ep / 7.5 min CPU | **avg=500.0** (min=500, max=500) | ✅ **SOLVED** |
 | **PPO v0.1** (tuned) | 1500 ep / 67s CPU | **avg=500.0** (min=500, max=500) | ✅ **SOLVED** |
+| **SAC v0.1** (new) | 600 ep / 37s CPU | avg=9.3 (min=8, max=11) | ❌ 未收敛 (需修) |
 | Dueling DQN v0.2 | 15 min (中断于 2000ep) | avg=167.4 (min=89, max=500) | ⚠️ 训练不够 |
 | DQN v0.1 (untuned) | 600 ep / 3 min CPU | avg=304.0 (eval 30ep) | ⚠️ 接近但不稳定 |
 
@@ -100,11 +101,14 @@ rl/
 │   ├── dqn.py             # DQN + Dueling DQN 训练 (~280 行)
 │   ├── eval_dqn.py        # 独立评估 DQN/Dueling
 │   ├── ppo.py             # PPO from scratch (~310 行)
-│   └── eval_ppo.py        # 独立评估 PPO
+│   ├── eval_ppo.py        # 独立评估 PPO
+│   ├── sac.py             # SAC from scratch (~310 行, 未收敛)
+│   └── eval_sac.py        # 独立评估 SAC
 ├── checkpoints/
 │   ├── dqn_cartpole.pt           (170KB, ✅ SOLVED 500/500)
 │   ├── dqn_dueling_cartpole.pt   (140KB, 未收敛)
-│   └── ppo_cartpole.pt           (140KB, ✅ SOLVED 500/500)
+│   ├── ppo_cartpole.pt           (140KB, ✅ SOLVED 500/500)
+│   └── sac_cartpole.pt           (140KB, ❌ 未收敛 ep 10 best)
 ├── logs/                  # (空, 预留)
 └── README.md
 ```
@@ -112,7 +116,8 @@ rl/
 ## 进阶方向 (后续)
 
 - [x] PPO (on-policy, 主流) - **1500 ep SOLVED 500/500** ✅
-- [ ] SAC (off-policy, sample efficient)
+- [x] SAC (off-policy, 最大熵) - v0.1 实现完成, **未收敛** (discrete SAC 估值 bug)
+- [ ] 修 SAC: 离散动作 sum over all actions V(s') = Σ_a π(a|s')·Q(s',a') 替代 sampled
 - [ ] 串 FTC 路径规划 (Bézier + RL 决策)
 - [ ] 调 Dueling DQN 训练时长: 2000+ ep 收敛
 - [ ] 调 DQN EPS_DECAY 0.99 → 0.995 (防 catastrophic forgetting)
