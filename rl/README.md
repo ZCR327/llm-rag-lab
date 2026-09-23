@@ -7,7 +7,7 @@ D4ML 课基础 RL 项目 - **DQN + Dueling DQN from scratch** on CartPole-v1 (Py
 | 架构 | 训练 | 评估 (50 ep) | 状态 |
 |---|---|---|---|
 | **DQN v0.2** (tuned) | 800 ep / 7.5 min CPU | **avg=500.0** (min=500, max=500) | ✅ **SOLVED** |
-| **PPO v0.1** (new) | 370 ep / 7s CPU | avg=121.3 (eval 20ep, max=130) | ⚠️ 训练不够 |
+| **PPO v0.1** (tuned) | 1500 ep / 67s CPU | **avg=500.0** (min=500, max=500) | ✅ **SOLVED** |
 | Dueling DQN v0.2 | 15 min (中断于 2000ep) | avg=167.4 (min=89, max=500) | ⚠️ 训练不够 |
 | DQN v0.1 (untuned) | 600 ep / 3 min CPU | avg=304.0 (eval 30ep) | ⚠️ 接近但不稳定 |
 
@@ -102,31 +102,50 @@ rl/
 │   ├── ppo.py             # PPO from scratch (~310 行)
 │   └── eval_ppo.py        # 独立评估 PPO
 ├── checkpoints/
-│   ├── dqn_cartpole.pt           (170KB, SOLVED 500/500)
+│   ├── dqn_cartpole.pt           (170KB, ✅ SOLVED 500/500)
 │   ├── dqn_dueling_cartpole.pt   (140KB, 未收敛)
-│   └── ppo_cartpole.pt           (140KB, best avg=258)
+│   └── ppo_cartpole.pt           (140KB, ✅ SOLVED 500/500)
 ├── logs/                  # (空, 预留)
 └── README.md
 ```
 
 ## 进阶方向 (后续)
 
-- [x] PPO (on-policy, 主流) - v0.1 实现完成, 未调优
+- [x] PPO (on-policy, 主流) - **1500 ep SOLVED 500/500** ✅
 - [ ] SAC (off-policy, sample efficient)
 - [ ] 串 FTC 路径规划 (Bézier + RL 决策)
-- [ ] 调 PPO 超参: lr_actor 3e-4→1e-3, 训练 1500+ ep
 - [ ] 调 Dueling DQN 训练时长: 2000+ ep 收敛
 - [ ] 调 DQN EPS_DECAY 0.99 → 0.995 (防 catastrophic forgetting)
 - [ ] Target network 软更新 (Polyak averaging) 而非硬更新
 
+## 训练曲线 (PPO v0.1)
+
+```
+ep  270: avg100=257  π=-0.002  V=+82.4   H=+0.65
+ep  600: avg100=259  π=+0.015  V=+89.7
+ep  850: avg100=270  π=+0.025  V=+111.9
+ep 1120: avg100=274  π=+0.015  V=+281.8   ★ best saved
+ep 1500: avg100=262
+
+[eval 20 ep, deterministic]: avg=500.0, min=500, max=500 ✅ SOLVED
+```
+
+**注意**: best avg100 训练期只 274, 但 eval deterministic = 500/500. 原因: PPO 训练用随机采样, 训练期 high variance; eval 强制 deterministic argmax, 完全发挥策略.
+
 ## D4ML 课报告草稿要点
 
-1. **算法**: DQN + Dueling DQN (value-based off-policy)
+1. **3 个算法**: DQN + Dueling DQN (value-based off-policy) + PPO (on-policy policy gradient)
 2. **环境**: CartPole-v1 (4-dim state, 2-dim action, max 500 step)
-3. **超参调优**: EPS_DECAY 0.995→0.99, BUFFER 10K→50K, BATCH 64→128, TARGET_UPDATE 10→5
-4. **结果**: DQN v0.2 solve CartPole-v1 (eval 500/500); Dueling 167/500 (训练不够)
+3. **超参调优**:
+   - DQN: EPS_DECAY 0.995→0.99, BUFFER 10K→50K, BATCH 64→128, TARGET_UPDATE 10→5
+   - PPO: 默认 GAE λ=0.95, clip=0.2, lr_actor=3e-4 (标准超参即 solve)
+4. **结果**:
+   - DQN v0.2: 800 ep / 7.5 min CPU → SOLVED eval 500/500
+   - PPO: 1500 ep / 67s CPU → SOLVED eval 500/500
+   - Dueling: 训练不足 (167/500)
 5. **Dueling 原理**: Q = V(s) + (A(s,a) - mean A), 拆分 V/A 提升学习效率
-6. **讨论**: CPU 训练瓶颈 + Catastrophic Forgetting 现象 (ep 525 后崩溃) + 软更新方案
+6. **PPO 原理**: Clipped surrogate objective 防策略剧变, GAE 平衡偏差/方差
+7. **讨论**: CPU 训练瓶颈 + Catastrophic Forgetting (DQN ep 525 后崩溃) + 软更新方案
 
 ## 引用
 
