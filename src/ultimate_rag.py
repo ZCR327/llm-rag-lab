@@ -108,9 +108,14 @@ def build_or_load_index():
         n_docs = len(list(DATA_DIR.iterdir()))
         return index, n_docs, 0
     log.info("建新索引...")
+    # v0.1.17: 加载 md + yaml + txt (智回社 logs 是 .txt code review)
+    # LangChain DirectoryLoader 不支持 brace expansion, 用 **/*.* 通配
     loader = DirectoryLoader(
-        str(DATA_DIR), glob="**/*.md", loader_cls=TextLoader,
+        str(DATA_DIR),
+        glob="**/*.*",
+        loader_cls=TextLoader,
         loader_kwargs={"encoding": "utf-8"},
+        silent_errors=True,
     )
     docs = loader.load()
     splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
