@@ -4,14 +4,16 @@ agent.py — Web Agent (Phase 2) 加在 RAG 仓库
 
 基于 v0.1.14 ultimate_rag (multi-query + BGE rerank + hyde-conservative)
 加 3 个 tool:
+- rag_search: **优先调用**, 覆盖本地 5 FTC + 1 飞机文档
 - search_web: cn.bing.com HTML 爬 (主, 直连, 免 key) + Brave API (opt) + DDG (last fallback)
 - fetch_url: 抓取 + 提取正文 (httpx + BS4)
-- rag_search: 复用 v0.1.14 RAG 索引查本地文档
 
-LangGraph ReAct agent 自动判断: 本地 RAG 够 → 用 rag_search, 不够 → search_web → fetch_url
+使用 LangGraph v1.0 新 API: from langchain.agents import create_agent
+- system_prompt 引导工具优先级 + 收敛策略
+- recursion_limit=20 防止无限循环
 
 Usage:
-    # 装包: pip install -U langgraph langchain langchain-core beautifulsoup4 httpx (清华源)
+    # 装包: pip install -U langchain langgraph beautifulsoup4 httpx (清华源)
     # 设环境变量: $env:DEEPSEEK_API_KEY = "sk-..."
     # (可选) 设 $env:BRAVE_API_KEY = "BSA..." 切换 Brave Search API (国外)
     # 跑: python D:\.minimax\.minimax\projects\llm-rag-lab\src\agent.py
@@ -158,8 +160,49 @@ def _search_ddg(query: str, num_results: int) -> str:
 
 # ======================== Tools ========================
 
+def tool_rag_search(query: str) -> str:
+    """**优先调用** - 查本地 6 文档 (5 FTC + 1 飞机), 4-6 秒返回. 覆盖:
+    - FTC V0.9 游戏规则 (DECODE / SKYSTONE / POWERPLAY / ULTIMATE GOAL / 等)
+    - FTC 机器人技术 (Pedro Pathing, 路径规划, 计算机视觉, 自动驾驶)
+    - FTC 比赛策略 (联盟选择, AUTO/TELEOP, 翻 HIVE, 投 POLLEN 等)
+    - 飞机 (737 MAX) 事故分析 (MCAS 失事案例)
+
+    返回: 答案 (中文) + 来源文件列表
+    **如果本地 RAG 给了答案就直接用**, 不要再 search_web (本工具已包含 multi-query + rerank)
+    """
+    try:
+        from ultimate_rag import (
+            build_or_load_index,
+            make_multi_query_chain,
+            make_hyde_conservative_chain,
+            make_reranker,
+            make_ultimate_qa,
+        )
+        from langchain_openai import ChatOpenAI
+
+        index, _, _ = build_or_load_index()
+        llm = ChatOpenAI(
+            model="deepseek-chat", temperature=0,
+            base_url="https://api.deepseek.com/v1",
+            api_key=os.environ["DEEPSEEK_API_KEY"],
+            timeout=120,
+        )
+        multi_chain = make_multi_query_chain(llm)
+        hyde_chain = make_hyde_conservative_chain(llm)
+        reranker = make_reranker()
+        qa = make_ultimate_qa(index, multi_chain, hyde_chain, reranker, llm)
+        answer, sources = qa(query)
+        src_list = "\n".join(
+            f"  [{i+1}] {s.metadata.get('source', '?').split(chr(92))[-1]}"
+            for i, s in enumerate(sources)
+        )
+        return f"本地 RAG 答案:\n{answer}\n\n来源:\n{src_list}"
+    except Exception as e:
+        return f"(RAG error: {e})"
+
+
 def tool_search_web(query: str, num_results: int = 5) -> str:
-    """网页搜索, 适合查最新信息或找网页来源.
+    """网页搜索 (本地 RAG 没答案时再用), 适合查最新信息或找网页来源.
 
     优先级:
       1. cn.bing.com HTML 爬 (国内直连, 免 key) - 首选
@@ -216,33 +259,26 @@ def tool_fetch_url(url: str, max_chars: int = 3000) -> str:
         return f"(fetch error: {e})"
 
 
-def tool_rag_search(query: str) -> str:
-    """复用 v0.1.14 ultimate_rag 索引, 查本地 6 文档 (5 FTC + 1 飞机)"""
-    try:
-        from ultimate_rag import build_or_load_index, make_multi_qa, make_query_rewriter, make_reranker
-        from langchain_openai import ChatOpenAI
-
-        index, _, _ = build_or_load_index()
-        rewriter = make_query_rewriter()
-        reranker = make_reranker()
-        llm = ChatOpenAI(
-            model="deepseek-chat", temperature=0,
-            base_url="https://api.deepseek.com/v1",
-            api_key=os.environ["DEEPSEEK_API_KEY"],
-            timeout=120,
-        )
-        qa = make_multi_qa(index, rewriter, reranker, llm)
-        answer, sources = qa(query)
-        src_list = "\n".join(
-            f"  [{i+1}] {s.metadata.get('source', '?').split(chr(92))[-1]}"
-            for i, s in enumerate(sources)
-        )
-        return f"本地 RAG 答案:\n{answer}\n\n来源:\n{src_list}"
-    except Exception as e:
-        return f"(RAG error: {e})"
-
-
 # ======================== Agent ========================
+
+SYSTEM_PROMPT = """你是 Web Agent (Phase 2). 用 3 个工具回答问题:
+
+工具优先级 (严格遵守):
+1. **rag_search (优先)** - 本地 6 文档 (5 FTC + 1 飞机), 4-6 秒返回答案. FTC/机器人/比赛相关问题**必须**先调它.
+2. **search_web** - 本地答不了/查最新信息时用. cn.bing.com 国内直连.
+3. **fetch_url** - 拿到 URL 后深入读正文.
+
+收敛策略:
+- **FTC / 机器人 / 比赛 / 计分 / 路径规划 / 视觉 / RAG / Pedro** 相关 → 先调 rag_search (本地几乎都有答案)
+- **最新新闻 / 论文 / 论文版本 / 软件下载 / 2026-2027 新版** → search_web
+- **拿到 URL 但要详情** → fetch_url (但不要连续 fetch 多个 URL, 1 个就够了)
+- **总计最多 4 次工具调用**, 超过就停止搜, 给出已知信息 + "需要查更多请换个关键词"
+
+输出格式:
+- 中文回答
+- 关键事实带来源 ([1] [2] 编号, 对应工具返回结果)
+- 如实说 "本地 + Web 都找不到" 而不要编造"""
+
 
 def main():
     api_key = os.environ.get("DEEPSEEK_API_KEY")
@@ -250,8 +286,8 @@ def main():
         print("[ERROR] 没设 DEEPSEEK_API_KEY")
         sys.exit(1)
 
-    print("[INFO] 加载 LangGraph ReAct agent + 3 tools...")
-    from langgraph.prebuilt import create_react_agent
+    print("[INFO] 加载 Web Agent (LangChain v1.0) + 3 tools...")
+    from langchain.agents import create_agent
     from langchain_openai import ChatOpenAI
 
     llm = ChatOpenAI(
@@ -261,14 +297,21 @@ def main():
         timeout=120,
     )
 
-    tools = [tool_search_web, tool_fetch_url, tool_rag_search]
-    agent = create_react_agent(llm, tools)
+    # rag_search 排第一 - 让 LLM 系统提示优先看
+    tools = [tool_rag_search, tool_search_web, tool_fetch_url]
+    react_agent = create_agent(
+        model=llm,
+        tools=tools,
+        system_prompt=SYSTEM_PROMPT,
+        debug=False,
+    )
 
     print(f"[INFO] Agent ready (tools: {[t.__name__ for t in tools]})")
+    print(f"[INFO] recursion_limit=20 (防止无限搜索)")
     print()
     print("=" * 60)
     print("  Web Agent ready (Phase 2)")
-    print("  本地 RAG + cn.bing.com 搜索 + URL 抓取")
+    print("  本地 RAG (5FTC+1飞机) + cn.bing.com 搜索 + URL 抓取")
     print("  输入问题按回车, 输入 quit/exit 退出")
     print("=" * 60)
     print()
@@ -283,7 +326,10 @@ def main():
 
         t0 = time.time()
         try:
-            result = agent.invoke({"messages": [("user", q)]})
+            result = react_agent.invoke(
+                {"messages": [("user", q)]},
+                config={"recursion_limit": 20},
+            )
             elapsed = time.time() - t0
             print(f"\n[A] (took {elapsed:.1f}s)")
             # 最后一条 assistant 消息
