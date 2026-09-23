@@ -1,17 +1,18 @@
 # -*- coding: utf-8 -*-
 """
-ultimate_rag.py — v0.1.14: Multi-Query + Conservative HyDE (终极版)
+ultimate_rag.py — v0.1.15: Multi-Query (2 angles) + Singleton BGE + Conservative HyDE
 
 融合:
-- v0.1.11 multi-query: 拆问题为 3 个角度查询
+- v0.1.11 multi-query: 拆问题为多个角度查询 (v0.1.15 改 3→2 角度, 提速)
+- v0.1.15 singleton: BGE reranker 模块级单例, 跨调用复用, 省 cold load 3-4s × N
 - v0.1.12 hyde: LLM 生成假设答案
 - v0.1.12 修复: hyde prompt 改成"保守版", 只描述涉及的领域术语, 不给具体数字/列表/定义
 - v0.1.6 老实 prompt: 严格基于资料, 不编造
 
 流程:
-1. multi-query 改写 → 3 个角度查询
-2. hyde 假设答案 (保守版, 只给领域术语) → 作为第 4 个查询
-3. 对 4 个查询各检索 top-3 → 合并去重 → rerank top-3
+1. multi-query 改写 → 2 个角度查询 (v0.1.15: 3→2)
+2. hyde 假设答案 (保守版, 只给领域术语) → 作为第 3 个查询
+3. 对 3 个查询各检索 top-3 → 合并去重 → rerank top-3
 4. LLM 用真实资料回答 (严格"不编造"prompt)
 """
 import logging
@@ -66,11 +67,14 @@ RERANKER_MODEL = str(ROOT / "models" / "bge-reranker-base")
 TOP_K_PER_QUERY = 3
 TOP_N_FINAL = 3
 
+# --- v0.1.15: BGE reranker 单例, 跨 tool_rag_search 调用复用 ---
+_BGE_RERANKER = None
+
 # --- prompts ---
 MULTI_QUERY_PROMPT = ChatPromptTemplate.from_messages([
-    ("system", "你是搜索查询优化助手. 把用户问题改写为 3 个不同角度的检索查询, "
+    ("system", "你是搜索查询优化助手. 把用户问题改写为 2 个不同角度的检索查询, "
                "用 ||| 分隔. 每个查询独立, 信息丰富, 用搜索友好的关键词."),
-    ("human", "原问题: {question}\n3 个角度查询 (用 ||| 分隔):"),
+    ("human", "原问题: {question}\n2 个角度查询 (用 ||| 分隔):"),
 ])
 
 # v0.1.14 关键改进: hyde 改成保守版, 不写具体内容, 只列可能涉及的领域术语
@@ -143,17 +147,21 @@ def make_hyde_conservative_chain(llm):
 
 
 def make_reranker():
-    return CrossEncoder(RERANKER_MODEL)
+    """v0.1.15: 返回 BGE reranker 单例. 跨 tool_rag_search 调用复用, 避免每次 cold load 3-4s."""
+    global _BGE_RERANKER
+    if _BGE_RERANKER is None:
+        _BGE_RERANKER = CrossEncoder(RERANKER_MODEL)
+    return _BGE_RERANKER
 
 
 def retrieve_ultimate(index, queries, hyde_terms, reranker,
                      top_k_per=TOP_K_PER_QUERY, top_n_final=TOP_N_FINAL):
-    """对 multi-query 3 角度 + hyde 术语合并检索"""
+    """对 multi-query 2 角度 + hyde 术语合并检索 (v0.1.15: 3→2 角度)"""
     all_queries = [q.strip() for q in queries.split("|||") if q.strip()]
-    # hyde 术语作为第 4 个查询 (单字符串, 整体检索)
+    # hyde 术语作为第 3 个查询 (单字符串, 整体检索)
     if hyde_terms and hyde_terms.strip():
         all_queries.append(hyde_terms.strip())
-    log.info(f"[Ultimate] {len(all_queries)} 个查询 (3 multi-query + 1 hyde 术语)")
+    log.info(f"[Ultimate] {len(all_queries)} 个查询 (2 multi-query + 1 hyde 术语)")
     seen = set()
     candidates = []
     for q in all_queries:
@@ -174,7 +182,7 @@ def retrieve_ultimate(index, queries, hyde_terms, reranker,
 
 def make_ultimate_qa(index, multi_chain, hyde_chain, reranker, llm):
     def qa(question):
-        # 1. multi-query 拆 3 角度
+        # 1. multi-query 拆 2 角度 (v0.1.15: 3→2, 提速)
         multi_str = multi_chain.invoke({"question": question})
         log.info(f"[MultiRewrite] {multi_str}")
 
@@ -206,8 +214,8 @@ def main():
     qa = make_ultimate_qa(index, multi_chain, hyde_chain, reranker, llm)
     print()
     print("=" * 60)
-    print("  Ultimate RAG ready (v0.1.14)")
-    print("  multi-query (3 角度) + hyde 保守 (只列术语) + rerank")
+    print("  Ultimate RAG ready (v0.1.15)")
+    print("  multi-query (2 角度) + hyde 保守 (只列术语) + BGE 单例 + rerank")
     print("=" * 60)
     print()
     while True:

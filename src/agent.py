@@ -1,16 +1,21 @@
 # -*- coding: utf-8 -*-
 """
-agent.py — Web Agent (Phase 2) 加在 RAG 仓库
+agent.py — Web Agent (Phase 2) 加在 RAG 仓库 (v0.1.16)
 
-基于 v0.1.14 ultimate_rag (multi-query + BGE rerank + hyde-conservative)
+基于 v0.1.15 ultimate_rag (multi-query 2 angles + BGE rerank singleton + hyde-conservative)
 加 3 个 tool:
-- rag_search: **优先调用**, 覆盖本地 5 FTC + 1 飞机文档
+- rag_search: **优先调用**, 覆盖本地 5 FTC + 1 飞机文档 (qa closure 单例, 跨调用复用)
 - search_web: cn.bing.com HTML 爬 (主, 直连, 免 key) + Brave API (opt) + DDG (last fallback)
 - fetch_url: 抓取 + 提取正文 (httpx + BS4)
 
-使用 LangGraph v1.0 新 API: from langchain.agents import create_agent
+使用 LangChain v1.0 新 API: from langchain.agents import create_agent
 - system_prompt 引导工具优先级 + 收敛策略
 - recursion_limit=20 防止无限循环
+
+性能:
+- v0.1.14: 单题 27s (每次重建 LLM + chains + qa)
+- v0.1.15 (singleton BGE): 单题 16-25s
+- v0.1.16 (qa 单例): 期望 ≤10s (实测待验证)
 
 Usage:
     # 装包: pip install -U langchain langgraph beautifulsoup4 httpx (清华源)
@@ -160,17 +165,15 @@ def _search_ddg(query: str, num_results: int) -> str:
 
 # ======================== Tools ========================
 
-def tool_rag_search(query: str) -> str:
-    """**优先调用** - 查本地 6 文档 (5 FTC + 1 飞机), 4-6 秒返回. 覆盖:
-    - FTC V0.9 游戏规则 (DECODE / SKYSTONE / POWERPLAY / ULTIMATE GOAL / 等)
-    - FTC 机器人技术 (Pedro Pathing, 路径规划, 计算机视觉, 自动驾驶)
-    - FTC 比赛策略 (联盟选择, AUTO/TELEOP, 翻 HIVE, 投 POLLEN 等)
-    - 飞机 (737 MAX) 事故分析 (MCAS 失事案例)
+# v0.1.16: module-level cache for qa closure - 跨 tool_rag_search 调用复用
+# 省 ~1-2s/次 (ChatOpenAI 初始化 + chain 构造 + reranker load)
+_QA_CACHE = None
 
-    返回: 答案 (中文) + 来源文件列表
-    **如果本地 RAG 给了答案就直接用**, 不要再 search_web (本工具已包含 multi-query + rerank)
-    """
-    try:
+
+def _get_qa():
+    """获取 (qa 闭包, index) 单例, 首次调用构造, 后续复用. 与 make_reranker 单例叠加效果."""
+    global _QA_CACHE
+    if _QA_CACHE is None:
         from ultimate_rag import (
             build_or_load_index,
             make_multi_query_chain,
@@ -189,8 +192,24 @@ def tool_rag_search(query: str) -> str:
         )
         multi_chain = make_multi_query_chain(llm)
         hyde_chain = make_hyde_conservative_chain(llm)
-        reranker = make_reranker()
+        reranker = make_reranker()  # 内部也是单例
         qa = make_ultimate_qa(index, multi_chain, hyde_chain, reranker, llm)
+        _QA_CACHE = qa
+    return _QA_CACHE
+
+
+def tool_rag_search(query: str) -> str:
+    """**优先调用** - 查本地 6 文档 (5 FTC + 1 飞机), 4-6 秒返回. 覆盖:
+    - FTC V0.9 游戏规则 (DECODE / SKYSTONE / POWERPLAY / ULTIMATE GOAL / 等)
+    - FTC 机器人技术 (Pedro Pathing, 路径规划, 计算机视觉, 自动驾驶)
+    - FTC 比赛策略 (联盟选择, AUTO/TELEOP, 翻 HIVE, 投 POLLEN 等)
+    - 飞机 (737 MAX) 事故分析 (MCAS 失事案例)
+
+    返回: 答案 (中文) + 来源文件列表
+    **如果本地 RAG 给了答案就直接用**, 不要再 search_web (本工具已包含 multi-query + rerank)
+    """
+    try:
+        qa = _get_qa()  # 单例, 跨调用复用
         answer, sources = qa(query)
         src_list = "\n".join(
             f"  [{i+1}] {s.metadata.get('source', '?').split(chr(92))[-1]}"
