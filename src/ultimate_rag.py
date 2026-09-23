@@ -65,7 +65,7 @@ INDEX_DIR = ROOT / "data" / "embeddings"
 INDEX_DIR.mkdir(parents=True, exist_ok=True)
 RERANKER_MODEL = str(ROOT / "models" / "bge-reranker-base")
 TOP_K_PER_QUERY = 3
-TOP_N_FINAL = 3
+TOP_N_FINAL = 5  # v0.1.18: 跨版本对比需要更多 sources
 
 # --- v0.1.15: BGE reranker 单例, 跨 tool_rag_search 调用复用 ---
 _BGE_RERANKER = None
@@ -118,7 +118,8 @@ def build_or_load_index():
         silent_errors=True,
     )
     docs = loader.load()
-    splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+    # v0.1.18: 大 chunk_size 防跨版本对比 (Q2 v2→v5) 丢语义
+    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
     chunks = splitter.split_documents(docs)
     log.info(f"分成 {len(chunks)} 个 chunk")
     BATCH_SIZE = 6
