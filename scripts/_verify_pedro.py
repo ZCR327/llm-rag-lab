@@ -5,12 +5,11 @@ import os
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-# 加载 .env
-env_path = Path(__file__).parent.parent / ".env"
-for line in env_path.read_text(encoding="utf-8").splitlines():
-    if "=" in line and not line.startswith("#"):
-        k, v = line.split("=", 1)
-        os.environ[k.strip()] = v.strip()
+# v0.1.17: 用 dotenv 简化 (替代手写 .env 解析)
+from dotenv import load_dotenv
+_env_path = Path(__file__).parent.parent / ".env"
+if _env_path.exists():
+    load_dotenv(_env_path, override=False)
 
 if not os.environ.get("DEEPSEEK_API_KEY"):
     print("[ERROR] 没设 DEEPSEEK_API_KEY")

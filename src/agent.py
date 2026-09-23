@@ -18,9 +18,9 @@ agent.py — Web Agent (Phase 2) 加在 RAG 仓库 (v0.1.16)
 - v0.1.16 (qa 单例): 期望 ≤10s (实测待验证)
 
 Usage:
-    # 装包: pip install -U langchain langgraph beautifulsoup4 httpx (清华源)
-    # 设环境变量: $env:DEEPSEEK_API_KEY = "sk-..."
-    # (可选) 设 $env:BRAVE_API_KEY = "BSA..." 切换 Brave Search API (国外)
+    # 装包: pip install -U langchain langgraph beautifulsoup4 httpx python-dotenv (清华源)
+    # v0.1.17+: agent.py 自动从 .env 加载, 不需要手动 export
+    # (可选) $env:BRAVE_API_KEY = "BSA..." 切换 Brave Search API (国外)
     # 跑: python D:\.minimax\.minimax\projects\llm-rag-lab\src\agent.py
 """
 import os
@@ -36,6 +36,16 @@ if sys.platform == "win32":
         sys.stderr.reconfigure(encoding="utf-8")
     except Exception:
         pass
+
+# v0.1.17: 自动从项目根 .env 加载 (DEEPSEEK_API_KEY / ZHIPU_API_KEY 等)
+# 避免每次跑前手动 source .env
+try:
+    from dotenv import load_dotenv
+    _env_path = Path(__file__).resolve().parent.parent / ".env"
+    if _env_path.exists():
+        load_dotenv(_env_path, override=False)  # 不覆盖已有 env var
+except ImportError:
+    pass  # dotenv 未装时退到 os.environ
 
 # 国内 hf-mirror 镜像 (跟其他 RAG 脚本一致)
 os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")

@@ -13,13 +13,14 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-if not os.environ.get("DEEPSEEK_API_KEY"):
-    print("[ERROR] 没设 DEEPSEEK_API_KEY")
-    sys.exit(1)
-
+# v0.1.17: import agent (触发 load_dotenv 自动加载 .env) 再检查 env var
 import agent  # noqa
 from langchain.agents import create_agent
 from langchain_openai import ChatOpenAI
+
+if not os.environ.get("DEEPSEEK_API_KEY"):
+    print("[ERROR] 没设 DEEPSEEK_API_KEY (项目 .env 加载失败?)")
+    sys.exit(1)
 
 llm = ChatOpenAI(
     model="deepseek-chat", temperature=0,
