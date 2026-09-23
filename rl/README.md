@@ -9,7 +9,7 @@ D4ML 课基础 RL 项目 - **DQN + Dueling DQN from scratch** on CartPole-v1 (Py
 | **DQN v0.2** (tuned) | 800 ep / 7.5 min CPU | **avg=500.0** (min=500, max=500) | ✅ **SOLVED** |
 | **PPO v0.1** (tuned) | 1500 ep / 67s CPU | **avg=500.0** (min=500, max=500) | ✅ **SOLVED** |
 | **SAC v0.2** (discrete V(s') fix) | 1000 ep / 58s CPU | avg=9.2 (saved best avg=24.4) | ❌ 未收敛 (Q 网络未学起) |
-| Dueling DQN v0.2 | 15 min (中断于 2000ep) | avg=167.4 (min=89, max=500) | ⚠️ 训练不够 |
+| Dueling DQN v0.2 (full 2000 ep) | 30 min CPU | avg=167.4 (min=89, max=500) | ⚠️ CPU 跑 2000 ep 不够 |
 | DQN v0.1 (untuned) | 600 ep / 3 min CPU | avg=304.0 (eval 30ep) | ⚠️ 接近但不稳定 |
 
 **Solve 阈值**: 100 ep 平均 ≥ 475。DQN v0.2 在 ep 525 时达 avg100=**452**（最近一次），saved checkpoint 在 50 episode 评估里**完美 500/500**。
@@ -106,7 +106,7 @@ rl/
 │   └── eval_sac.py        # 独立评估 SAC
 ├── checkpoints/
 │   ├── dqn_cartpole.pt           (170KB, ✅ SOLVED 500/500)
-│   ├── dqn_dueling_cartpole.pt   (140KB, 未收敛)
+│   ├── dqn_dueling_cartpole.pt   (140KB, ⚠️ CPU 30 min 跑 2000 ep, 167/500 - 需 GPU/更长)
 │   ├── ppo_cartpole.pt           (140KB, ✅ SOLVED 500/500)
 │   ├── sac_cartpole.pt           (140KB, v0.1 未收敛)
 │   └── sac_v2_cartpole.pt        (140KB, v0.2 V(s') fix, 仍未收敛)
@@ -119,7 +119,7 @@ rl/
 - [x] PPO (on-policy, 主流) - **1500 ep SOLVED 500/500** ✅
 - [x] SAC v0.2 (V(s') full-sum fix + -log|A| entropy) - **未收敛** (Q 网络未学起, 跟 PPO/DQN 不同)
 - [ ] 串 FTC 路径规划 (Bézier + RL 决策)
-- [ ] 调 Dueling DQN 训练时长: 2000+ ep 收敛
+- [x] 调 Dueling DQN 训练时长: 2000 ep / 30 min 仍 167/500 (需 GPU 或 5000+ ep)
 - [ ] 调 DQN EPS_DECAY 0.99 → 0.995 (防 catastrophic forgetting)
 - [ ] Target network 软更新 (Polyak averaging) 而非硬更新
 
