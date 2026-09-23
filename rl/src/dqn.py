@@ -1,14 +1,20 @@
 # -*- coding: utf-8 -*-
 """
-dqn.py — Deep Q-Network (DQN) implementation from scratch (PyTorch + gymnasium)
+dqn.py — DQN + Dueling DQN from scratch (PyTorch + gymnasium)
 
-D4ML 课基础 RL 项目: 跑通 CartPole-v1 经典控制任务
-- 不用 Stable Baselines 3 (依赖重), 纯手写 DQN
-- Intel Iris Xe 集显可用 (PyTorch CPU 模式, 1-2 TFLOPS)
-- CartPole 状态 4 维, 动作 2 离散 - 最简单 RL 入门任务
-- 目标: 500 回合平均奖励 ≥ 475 (满分 500, 任务解决标准)
+D4ML 课程项目 - 调优版 (v0.2):
+- 调优超参: EPS_DECAY 0.995→0.99, BUFFER 10K→50K, MAX_EP 600→2000
+- 加 Dueling DQN 架构 (Q = V(s) + A(s,a) - sample efficiency ↑)
+- 同一文件, 切换 --dueling 启用 Dueling
+
+用法:
+  python src/dqn.py                  # 默认 DQN + 调优超参
+  python src/dqn.py --dueling        # Dueling DQN
+  python src/dqn.py --quick          # 快速测试 (100 ep)
 """
 import os
+import sys
+import argparse
 import random
 import time
 from collections import deque
@@ -23,26 +29,26 @@ import torch.optim as optim
 import gymnasium as gym
 
 
-# ======================== Hyperparameters ========================
+# ======================== Hyperparameters (v0.2 tuned) ========================
 
 SEED = 42
 LR = 1e-3                  # learning rate
 GAMMA = 0.99               # discount factor
-BATCH_SIZE = 64
-BUFFER_SIZE = 10_000       # replay buffer
-EPS_START = 1.0            # epsilon greedy start (100% random)
-EPS_END = 0.05             # epsilon greedy end (5% random)
-EPS_DECAY = 0.995          # per-episode multiplicative decay
-TARGET_UPDATE = 10          # episodes between target net hard update
-HIDDEN = 128               # hidden layer size
-MAX_EPISODES = 600          # training cap (CartPole solves by ~200-400 typical)
-LOG_EVERY = 20
+BATCH_SIZE = 128           # 64 → 128 (more stable gradients)
+BUFFER_SIZE = 50_000      # 10K → 50K (more diverse replay)
+EPS_START = 1.0
+EPS_END = 0.05
+EPS_DECAY = 0.99           # 0.995 → 0.99 (slower decay, explore longer)
+TARGET_UPDATE = 5          # 10 → 5 (faster target sync)
+HIDDEN = 128
+MAX_EPISODES = 2000        # 600 → 2000 (CPU 10 min, GPU <1 min)
+LOG_EVERY = 25
 
 
-# ======================== Q-Network ========================
+# ======================== Networks ========================
 
 class QNet(nn.Module):
-    """Simple MLP: state_dim -> hidden -> hidden -> num_actions"""
+    """Standard DQN: state_dim -> hidden -> hidden -> num_actions"""
 
     def __init__(self, state_dim: int, num_actions: int, hidden: int = HIDDEN):
         super().__init__()
@@ -58,11 +64,44 @@ class QNet(nn.Module):
         return self.net(x)
 
 
+class DuelingQNet(nn.Module):
+    """Dueling DQN: Q(s,a) = V(s) + (A(s,a) - mean_a A(s,a))
+
+    拆分 value 和 advantage, 学习效率更高 (尤其 action 空间大时)
+    """
+
+    def __init__(self, state_dim: int, num_actions: int, hidden: int = HIDDEN):
+        super().__init__()
+        # 共享特征层
+        self.feature = nn.Sequential(
+            nn.Linear(state_dim, hidden),
+            nn.ReLU(),
+        )
+        # Value stream: V(s) 标量
+        self.value_stream = nn.Sequential(
+            nn.Linear(hidden, hidden),
+            nn.ReLU(),
+            nn.Linear(hidden, 1),  # V(s) 一个数
+        )
+        # Advantage stream: A(s,a) 每个动作一个数
+        self.advantage_stream = nn.Sequential(
+            nn.Linear(hidden, hidden),
+            nn.ReLU(),
+            nn.Linear(hidden, num_actions),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        feat = self.feature(x)
+        value = self.value_stream(feat)              # (B, 1)
+        advantage = self.advantage_stream(feat)      # (B, num_actions)
+        # 中心化: A - mean(A) 避免 V 和 A 唯一性歧义
+        q = value + (advantage - advantage.mean(dim=1, keepdim=True))
+        return q
+
+
 # ======================== Replay Buffer ========================
 
 class ReplayBuffer:
-    """Standard experience replay buffer (uniform random sampling)"""
-
     def __init__(self, capacity: int):
         self.capacity = capacity
         self.buf = deque(maxlen=capacity)
@@ -88,24 +127,25 @@ class ReplayBuffer:
 # ======================== DQN Agent ========================
 
 class DQNAgent:
-    def __init__(self, state_dim: int, num_actions: int):
+    def __init__(self, state_dim: int, num_actions: int, dueling: bool = False):
         torch.manual_seed(SEED)
         np.random.seed(SEED)
         random.seed(SEED)
 
+        NetCls = DuelingQNet if dueling else QNet
         self.num_actions = num_actions
-        self.policy_net = QNet(state_dim, num_actions)
-        self.target_net = QNet(state_dim, num_actions)
+        self.policy_net = NetCls(state_dim, num_actions)
+        self.target_net = NetCls(state_dim, num_actions)
         self.target_net.load_state_dict(self.policy_net.state_dict())
-        self.target_net.eval()  # target net is inference-only
+        self.target_net.eval()
 
         self.optimizer = optim.Adam(self.policy_net.parameters(), lr=LR)
         self.buffer = ReplayBuffer(BUFFER_SIZE)
         self.eps = EPS_START
         self.steps = 0
+        self.dueling = dueling
 
     def select_action(self, state: np.ndarray) -> int:
-        """epsilon-greedy action selection"""
         self.steps += 1
         if random.random() < self.eps:
             return random.randrange(self.num_actions)
@@ -115,23 +155,19 @@ class DQNAgent:
             return int(q.argmax(dim=1).item())
 
     def train_step(self) -> float | None:
-        """One gradient step. Returns loss (or None if buffer too small)."""
         if len(self.buffer) < BATCH_SIZE:
             return None
         s, a, r, s_next, done = self.buffer.sample(BATCH_SIZE)
 
-        # Q(s, a) from policy net
         q_pred = self.policy_net(s).gather(1, a.unsqueeze(1)).squeeze(1)
 
-        # Target: r + γ * max_a Q_target(s', a) * (1 - done)
         with torch.no_grad():
             q_next = self.target_net(s_next).max(dim=1)[0]
             q_target = r + GAMMA * q_next * (1.0 - done)
 
-        loss = F.smooth_l1_loss(q_pred, q_target)  # Huber loss
+        loss = F.smooth_l1_loss(q_pred, q_target)
         self.optimizer.zero_grad()
         loss.backward()
-        # gradient clipping for stability
         nn.utils.clip_grad_norm_(self.policy_net.parameters(), 10.0)
         self.optimizer.step()
         return float(loss.item())
@@ -145,19 +181,20 @@ class DQNAgent:
 
 # ======================== Training ========================
 
-def train(env_name: str = "CartPole-v1", save_path: Path = None) -> DQNAgent:
-    """Train DQN on env, save best model to save_path."""
+def train(env_name: str = "CartPole-v1", save_path: Path = None,
+         dueling: bool = False, max_episodes: int = MAX_EPISODES) -> DQNAgent:
     env = gym.make(env_name)
     state_dim = env.observation_space.shape[0]
     num_actions = env.action_space.n
-    print(f"[env] {env_name} state_dim={state_dim} num_actions={num_actions}")
+    arch = "Dueling DQN" if dueling else "DQN"
+    print(f"[env] {env_name} state_dim={state_dim} num_actions={num_actions} arch={arch}")
 
-    agent = DQNAgent(state_dim, num_actions)
-    recent_returns = deque(maxlen=100)  # for moving average
+    agent = DQNAgent(state_dim, num_actions, dueling=dueling)
+    recent_returns = deque(maxlen=100)
     best_avg = -float("inf")
     start = time.time()
 
-    for ep in range(1, MAX_EPISODES + 1):
+    for ep in range(1, max_episodes + 1):
         s, _ = env.reset(seed=SEED + ep)
         ep_return = 0.0
         ep_loss_sum = 0.0
@@ -185,7 +222,6 @@ def train(env_name: str = "CartPole-v1", save_path: Path = None) -> DQNAgent:
         if ep % TARGET_UPDATE == 0:
             agent.update_target()
 
-        # Logging
         if ep % LOG_EVERY == 0:
             avg = np.mean(recent_returns)
             elapsed = time.time() - start
@@ -198,9 +234,9 @@ def train(env_name: str = "CartPole-v1", save_path: Path = None) -> DQNAgent:
                 best_avg = avg
                 if save_path:
                     torch.save(agent.policy_net.state_dict(), save_path)
-                    print(f"  ★ saved best model (avg={avg:.1f}) to {save_path}")
+                    print(f"  ★ saved best (avg={avg:.1f}) → {save_path}")
 
-        # CartPole 解决标准: 100 episode 平均 ≥ 475
+        # CartPole 解决: 100 episode 平均 ≥ 475
         if len(recent_returns) >= 100 and np.mean(recent_returns) >= 475:
             print(f"\n[✓] SOLVED at episode {ep} (avg100={np.mean(recent_returns):.1f})")
             if save_path:
@@ -212,7 +248,6 @@ def train(env_name: str = "CartPole-v1", save_path: Path = None) -> DQNAgent:
 
 
 def evaluate(agent: DQNAgent, env_name: str = "CartPole-v1", episodes: int = 20) -> float:
-    """Evaluate trained agent (deterministic, epsilon=0)."""
     env = gym.make(env_name)
     returns = []
     for ep in range(episodes):
@@ -233,13 +268,30 @@ def evaluate(agent: DQNAgent, env_name: str = "CartPole-v1", episodes: int = 20)
     return avg
 
 
+# ======================== CLI ========================
+
 if __name__ == "__main__":
-    save = Path(__file__).resolve().parent.parent / "checkpoints" / "dqn_cartpole.pt"
+    p = argparse.ArgumentParser()
+    p.add_argument("--dueling", action="store_true", help="用 Dueling DQN 架构")
+    p.add_argument("--quick", action="store_true", help="快速测试 (100 回合)")
+    p.add_argument("--episodes", type=int, default=MAX_EPISODES, help=f"最大回合数 (默认 {MAX_EPISODES})")
+    p.add_argument("--env", default="CartPole-v1", help="gymnasium 环境名")
+    args = p.parse_args()
+
+    if args.quick:
+        args.episodes = 100
+        EPS_DECAY = 0.99  # still slow decay for quick test
+
+    save_name = "dqn_dueling_cartpole.pt" if args.dueling else "dqn_cartpole.pt"
+    save = Path(__file__).resolve().parent.parent / "checkpoints" / save_name
     save.parent.mkdir(parents=True, exist_ok=True)
 
     print("=" * 60)
-    print("D4ML — DQN from scratch on CartPole-v1")
+    arch_name = "Dueling DQN" if args.dueling else "DQN"
+    print(f"D4ML — {arch_name} (v0.2 tuned) on {args.env}")
+    print(f"  EPS_DECAY={EPS_DECAY} BUFFER={BUFFER_SIZE} BATCH={BATCH_SIZE} TARGET_UPDATE={TARGET_UPDATE}")
     print("=" * 60)
-    agent = train("CartPole-v1", save_path=save)
+
+    agent = train(args.env, save_path=save, dueling=args.dueling, max_episodes=args.episodes)
     print("\n--- final evaluation ---")
-    evaluate(agent, "CartPole-v1", episodes=20)
+    evaluate(agent, args.env, episodes=20)

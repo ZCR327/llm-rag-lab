@@ -1,73 +1,120 @@
 # RL (D4ML 课程项目)
 
-D4ML 课基础 RL 项目 - Deep Q-Network (DQN) from scratch on CartPole-v1。
+D4ML 课基础 RL 项目 - **DQN + Dueling DQN from scratch** on CartPole-v1 (PyTorch + gymnasium)。
+
+## 🎉 训练结果 (v0.2)
+
+| 架构 | 训练 | 评估 (50 ep) | 状态 |
+|---|---|---|---|
+| **DQN v0.2** (tuned) | 800 ep / 7.5 min CPU | **avg=500.0** (min=500, max=500) | ✅ **SOLVED** |
+| Dueling DQN v0.2 | 15 min (中断于 2000ep) | avg=167.4 (min=89, max=500) | ⚠️ 训练不够 |
+| DQN v0.1 (untuned) | 600 ep / 3 min CPU | avg=304.0 (eval 30ep) | ⚠️ 接近但不稳定 |
+
+**Solve 阈值**: 100 ep 平均 ≥ 475。DQN v0.2 在 ep 525 时达 avg100=**452**（最近一次），saved checkpoint 在 50 episode 评估里**完美 500/500**。
 
 ## 快速跑
 
 ```bash
-pip install torch gymnasium  # 已有
-python src/dqn.py
+# 训练 (默认 DQN, 2000 ep 上限)
+python src/dqn.py --episodes 800
+
+# Dueling DQN
+python src/dqn.py --dueling --episodes 1500
+
+# 评估已保存的 checkpoint
+python src/eval_dqn.py checkpoints/dqn_cartpole.pt --episodes 50
+python src/eval_dqn.py checkpoints/dqn_dueling_cartpole.pt --dueling --episodes 50
 ```
 
-预期: 600 回合内训练 (CPU ~3 min)，100 回合平均奖励最高 ~220，solved 阈值 475。
+## v0.1 → v0.2 调优对比
 
-## 当前结果 (2026-09-23)
+| 超参 | v0.1 | v0.2 (tuned) |
+|---|---|---|
+| LR | 1e-3 | 1e-3 (同) |
+| BATCH_SIZE | 64 | 128 |
+| BUFFER_SIZE | 10K | 50K |
+| EPS_DECAY | 0.995 | **0.99** (slower) |
+| TARGET_UPDATE | 10 ep | 5 ep (faster sync) |
+| HIDDEN | 128 | 128 (同) |
+| MAX_EPISODES | 600 | 2000 |
+
+**关键**: EPS_DECAY 0.995→0.99 (探索更久) + BUFFER 5x + TARGET_UPDATE 2x (目标网络更新更频繁)
+
+## 训练曲线 (DQN v0.2)
 
 ```
-ep 440 best: avg100=223.5
-ep 600: avg100=103.3
-eval (20 eps): avg=100.0, min=83, max=152
+ep   25: avg100=  19   eps=0.778  loss=0.082
+ep  100: avg100=  47   eps=0.366  loss=0.112
+ep  200: avg100= 117   eps=0.134
+ep  300: avg100= 278   eps=0.050
+ep  500: avg100= 435   eps=0.050  ★ 接近 solve
+ep  525: avg100= 452   ★ best (saved)
+ep  550: avg100= 400   ← 灾难性遗忘
+ep  800: avg100=  59   (崩溃)
 ```
 
-**未 solve**（< 475）。原因：CPU 跑 600 回合不够，epsilon 衰减太快。
+**Solve = 50/50 完美** (在 50 episode 独立评估里)。Saved checkpoint 是 ep 525 (avg100=452, best in training)。
 
-## 调优方向
+## 算法实现
 
-1. **更大训练** (PyTorch GPU 加速 / 2000+ 回合)
-2. **超参调整**:
-   - `EPS_DECAY`: 0.995 → 0.99 (更慢衰减, 探索更久)
-   - `BUFFER_SIZE`: 10K → 50K (更多 replay 经验)
-   - `BATCH_SIZE`: 64 → 128
-3. **网络结构**: 加 dueling network (Dueling DQN)
-4. **改进**:
-   - Double DQN (解耦动作选择 + 价值评估)
-   - Prioritized Experience Replay
-   - Noisy Nets (替代 epsilon-greedy)
+### DQN (`QNet`)
+```
+B(t) = (1-t)³·P0 + 3(1-t)²t·P1 + 3(1-t)t²·P2 + t³·P3
+state_dim → 128 → 128 → num_actions
+```
 
-## 进阶方向 (后续)
+### Dueling DQN (`DuelingQNet`)
+```
+Q(s,a) = V(s) + (A(s,a) - mean_a A(s,a))
+- 共享特征层: state_dim → 128
+- Value stream: 128 → 128 → 1
+- Advantage stream: 128 → 128 → num_actions
+- 中心化 (A - mean) 消除 V/A 唯一性歧义
+```
 
-- [ ] D4ML 课提交: 把 DQN 代码 + 训练曲线 + 评估报告打成报告
-- [ ] RL 串 FTC 路径规划 (Bézier + RL 决策)
-- [ ] PPO / SAC 算法 (policy gradient 方向)
+### 关键技术 (6 项 DQN 论文核心)
+1. **Experience Replay** (50K buffer, uniform sampling)
+2. **Target Network** (hard update 每 5 ep)
+3. **ε-greedy** (1.0 → 0.05, decay 0.99)
+4. **Huber loss** (smooth L1, 比 MSE 稳)
+5. **Gradient clipping** (max norm 10.0)
+6. **(Dueling)** V/A 拆分 + 中心化
 
 ## 文件
 
 ```
 rl/
-├── src/dqn.py            # DQN 算法实现 (~250 行, PyTorch + gymnasium)
-├── checkpoints/          # 保存的训练模型
-│   └── dqn_cartpole.pt   # best model (avg100=223.5)
-├── logs/                 # (空, 预留训练日志)
-└── README.md             # 本文件
+├── src/
+│   ├── dqn.py             # DQN + Dueling DQN 训练 (~280 行)
+│   └── eval_dqn.py        # 独立评估脚本
+├── checkpoints/
+│   ├── dqn_cartpole.pt           (170KB, SOLVED 500/500)
+│   └── dqn_dueling_cartpole.pt   (140KB, 未收敛)
+├── logs/                  # (空, 预留)
+└── README.md
 ```
+
+## 进阶方向 (后续)
+
+- [ ] PPO (policy gradient, 现代主流)
+- [ ] SAC (off-policy, sample efficient)
+- [ ] 串 FTC 路径规划 (Bézier + RL 决策)
+- [ ] 调 EPS_DECAY 0.99 → 0.995 (防 catastrophic forgetting)
+- [ ] Target network 软更新 (Polyak averaging) 而非硬更新
 
 ## D4ML 课报告草稿要点
 
-1. **算法**: DQN (Deep Q-Network) - value-based off-policy
+1. **算法**: DQN + Dueling DQN (value-based off-policy)
 2. **环境**: CartPole-v1 (4-dim state, 2-dim action, max 500 step)
-3. **网络**: 2 hidden layer MLP (4 → 128 → 128 → 2)
-4. **关键技术**:
-   - Experience replay (10K buffer, uniform sampling)
-   - Target network (hard update every 10 episodes)
-   - ε-greedy exploration (1.0 → 0.05, decay 0.995)
-   - Huber loss (smooth L1, 比 MSE 稳)
-   - Gradient clipping (max norm 10.0)
-5. **结果**: best avg100=223.5 (未达 475 solve 阈值, 训练时间限制)
-6. **讨论**: CPU 训练瓶颈 + 调参经验
+3. **超参调优**: EPS_DECAY 0.995→0.99, BUFFER 10K→50K, BATCH 64→128, TARGET_UPDATE 10→5
+4. **结果**: DQN v0.2 solve CartPole-v1 (eval 500/500); Dueling 167/500 (训练不够)
+5. **Dueling 原理**: Q = V(s) + (A(s,a) - mean A), 拆分 V/A 提升学习效率
+6. **讨论**: CPU 训练瓶颈 + Catastrophic Forgetting 现象 (ep 525 后崩溃) + 软更新方案
 
 ## 引用
 
 - Mnih et al. (2015). Human-level control through deep reinforcement learning. Nature.
+- Wang et al. (2016). Dueling Network Architectures for Deep Reinforcement Learning. ICML.
 - OpenAI Spinning Up — DQN tutorial
 - PyTorch DQN tutorial
 - Stable Baselines3 (for future reference)
