@@ -64,8 +64,9 @@ DATA_DIR = ROOT / "data" / "raw"
 INDEX_DIR = ROOT / "data" / "embeddings"
 INDEX_DIR.mkdir(parents=True, exist_ok=True)
 RERANKER_MODEL = str(ROOT / "models" / "bge-reranker-base")
-TOP_K_PER_QUERY = 3
-TOP_N_FINAL = 5  # v0.1.18: 跨版本对比需要更多 sources
+TOP_K_PER_QUERY = int(os.getenv("TOP_K_PER_QUERY", "8"))  # v0.1.19: 大上下文需要更多候选 (3 个 query × 8 = 24 candidates)
+TOP_N_FINAL = int(os.getenv("TOP_N_FINAL", "20"))  # v0.1.19: 大上下文 (DeepSeek 128K / 4 tokens×1000chars=250/chunk → 20 chunks = 5K tokens = 上下文 ~5%)
+# MAX_CONTEXT_CHARS = int(os.getenv("MAX_CONTEXT_CHARS", "50000"))  # 50K chars 上下文 (~12K tokens, DeepSeek 安全区)
 
 # --- v0.1.15: BGE reranker 单例, 跨 tool_rag_search 调用复用 ---
 _BGE_RERANKER = None
@@ -186,7 +187,12 @@ def retrieve_ultimate(index, queries, hyde_terms, reranker,
     return [doc for _, doc in ranked[:top_n_final]]
 
 
-def make_ultimate_qa(index, multi_chain, hyde_chain, reranker, llm):
+def make_ultimate_qa(index, multi_chain, hyde_chain, reranker, llm, max_context_chars=None):
+    """v0.1.19: max_context_chars 控制总 context 长度 (默认 50000 = ~12K tokens, DeepSeek 安全区)
+    DeepSeek 128K tokens 上限, 我们用 ~5% 作为 context, 留 95% 给 model 思考"""
+    if max_context_chars is None:
+        max_context_chars = int(os.getenv("MAX_CONTEXT_CHARS", "50000"))
+
     def qa(question):
         # 1. multi-query 拆 2 角度 (v0.1.15: 3→2, 提速)
         multi_str = multi_chain.invoke({"question": question})
@@ -198,9 +204,20 @@ def make_ultimate_qa(index, multi_chain, hyde_chain, reranker, llm):
 
         # 3. 合并检索
         docs = retrieve_ultimate(index, multi_str, hyde_terms, reranker)
-        context = "\n\n---\n\n".join(f"[{i+1}] {doc.page_content}" for i, doc in enumerate(docs))
+        # 4. 拼 context 但不超 max_context_chars
+        parts = []
+        total = 0
+        for i, doc in enumerate(docs):
+            chunk = f"[{i+1}] {doc.page_content}"
+            if total + len(chunk) > max_context_chars:
+                log.info(f"[Context] 截断 at {i} chunks, {total} chars")
+                break
+            parts.append(chunk)
+            total += len(chunk)
+        context = "\n\n---\n\n".join(parts)
+        log.info(f"[Context] {len(parts)} chunks, {total} chars (~{total//4} tokens)")
 
-        # 4. LLM 回答 (v0.1.6 老实 prompt)
+        # 5. LLM 回答 (v0.1.6 老实 prompt)
         answer = llm.invoke(ANSWER_PROMPT.format_messages(context=context, question=question))
         return answer.content, docs
     return qa
