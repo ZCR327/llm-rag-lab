@@ -288,17 +288,93 @@ def tool_fetch_url(url: str, max_chars: int = 3000) -> str:
         return f"(fetch error: {e})"
 
 
+def tool_zhipu_ocr(image_path: str, mode: str = "extract") -> str:
+    """**学生题目截图 OCR** - 智谱 GLM-4V 多模态 (替代 PaddlePaddle/EasyOCR/jina).
+
+    适合: 学生数学题 / 物理题 / 化学题截图, 需要公式识别 (LaTeX 输出).
+
+    参数:
+      image_path: 图片绝对路径 (jpg/png/webp/gif/bmp)
+      mode: 'extract' (纯 OCR, 公式用 LaTeX) 或 'solve' (OCR + 完整解答)
+
+    返回: 提取的文本/解答 (中文)
+
+    失败回退: PaddlePaddle (Intel Iris Xe 不稳) / jina-ocr-v1 本地 (慢, 公式弱)
+    """
+    import base64
+    import mimetypes
+    from pathlib import Path as _Path
+
+    api_key = os.environ.get("ZHIPUAI_KEY") or os.environ.get("ZHIPU_API_KEY")
+    if not api_key:
+        return "(zhipu_ocr error: 缺 ZHIPUAI_KEY / ZHIPU_API_KEY)"
+
+    img_path = _Path(image_path)
+    if not img_path.exists():
+        return f"(zhipu_ocr error: 图片不存在 {image_path})"
+
+    if mode not in ("extract", "solve"):
+        return f"(zhipu_ocr error: mode 必须是 extract/solve, 收到 {mode!r})"
+
+    # 提示词 (跟 zhipu_ocr.py 同步)
+    prompts = {
+        "extract": (
+            "请提取图片中所有文字内容, 数学公式用 LaTeX 格式 (例如 $\\frac{{a}}{{b}}$, $x^2$). "
+            "保留题号 (如 1., (1), ①) 和分段. "
+            "**直接输出提取的文本, 不要解释**. "
+            "如果图片不清晰或不是文字内容, 输出 [无法识别]."
+        ),
+        "solve": (
+            "请解答图片中的题目. 步骤:\n"
+            "1. **提取题目**: 完整抄写题目的文字, 公式用 LaTeX.\n"
+            "2. **分析**: 简短说明解题思路 (1-3 句).\n"
+            "3. **解答**: 给出完整步骤 + 最终答案.\n"
+            "如果有多个小题, 用 (1), (2), (3) 分别作答."
+        ),
+    }
+
+    try:
+        from zhipuai import ZhipuAI
+        client = ZhipuAI(api_key=api_key)
+
+        mime, _ = mimetypes.guess_type(str(img_path))
+        if mime is None:
+            ext = img_path.suffix.lower()
+            mime = {".jpg":"image/jpeg",".jpeg":"image/jpeg",".png":"image/png",
+                    ".webp":"image/webp",".gif":"image/gif",".bmp":"image/bmp"}.get(ext, "image/jpeg")
+        b64 = base64.b64encode(img_path.read_bytes()).decode("ascii")
+        data_url = f"data:{mime};base64,{b64}"
+
+        resp = client.chat.completions.create(
+            model="glm-4v-flash",
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": data_url}},
+                    {"type": "text", "text": prompts[mode]},
+                ],
+            }],
+            temperature=0.1,
+            max_tokens=1024,
+        )
+        return resp.choices[0].message.content
+    except Exception as e:
+        return f"(zhipu_ocr error: {type(e).__name__}: {e})"
+
+
 # ======================== Agent ========================
 
-SYSTEM_PROMPT = """你是 Web Agent (Phase 2). 用 3 个工具回答问题:
+SYSTEM_PROMPT = """你是 Web Agent (Phase 2 + OCR). 用 4 个工具回答问题:
 
 工具优先级 (严格遵守):
-1. **rag_search (优先)** - 本地 6 文档 (5 FTC + 1 飞机), 4-6 秒返回答案. FTC/机器人/比赛相关问题**必须**先调它.
-2. **search_web** - 本地答不了/查最新信息时用. cn.bing.com 国内直连.
-3. **fetch_url** - 拿到 URL 后深入读正文.
+1. **rag_search (优先)** - 本地 56 文档 (5 FTC + 1 飞机 + 50 智回社/FTC 笔记), 3-7 秒返回答案. FTC/机器人/比赛/智回社/路径规划相关问题**必须**先调它.
+2. **zhipu_ocr (新增)** - 智谱 GLM-4V 多模态 OCR. 适合学生题目截图 (含公式用 LaTeX, 可顺便解题).
+3. **search_web** - 本地答不了/查最新信息时用. cn.bing.com 国内直连.
+4. **fetch_url** - 拿到 URL 后深入读正文.
 
 收敛策略:
-- **FTC / 机器人 / 比赛 / 计分 / 路径规划 / 视觉 / RAG / Pedro** 相关 → 先调 rag_search (本地几乎都有答案)
+- **FTC / 机器人 / 比赛 / 计分 / 路径规划 / 视觉 / RAG / Pedro / 智回社** 相关 → 先调 rag_search (本地几乎都有答案)
+- **题目截图 OCR / 解题** → zhipu_ocr (image_path 必传绝对路径)
 - **最新新闻 / 论文 / 论文版本 / 软件下载 / 2026-2027 新版** → search_web
 - **拿到 URL 但要详情** → fetch_url (但不要连续 fetch 多个 URL, 1 个就够了)
 - **总计最多 4 次工具调用**, 超过就停止搜, 给出已知信息 + "需要查更多请换个关键词"
@@ -327,7 +403,7 @@ def main():
     )
 
     # rag_search 排第一 - 让 LLM 系统提示优先看
-    tools = [tool_rag_search, tool_search_web, tool_fetch_url]
+    tools = [tool_rag_search, tool_zhipu_ocr, tool_search_web, tool_fetch_url]
     react_agent = create_agent(
         model=llm,
         tools=tools,
