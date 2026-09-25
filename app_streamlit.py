@@ -140,12 +140,12 @@ TOP_K_PER_QUERY={int(os.getenv('TOP_K_PER_QUERY', '8'))}""", language="bash")
 # 第二次切模式会卡. 现在改成单向: widget 决定 mode, 再写回 session_state
 if "mode" not in st.session_state:
     st.session_state.mode = "rag"
-mode_index = 0 if st.session_state.mode == "rag" else 1
+mode_index = {"rag": 0, "ocr": 1, "mm_rag": 2}.get(st.session_state.mode, 0)
 mode = st.radio(
     "🔀 模式",
-    options=["rag", "ocr"],
+    options=["rag", "ocr", "mm_rag"],
     index=mode_index,
-    format_func=lambda x: "🔍 RAG 检索" if x == "rag" else "📷 OCR 题目截图",
+    format_func=lambda x: {"rag":"🔍 RAG 检索", "ocr":"📷 纯 OCR", "mm_rag":"🖼️ OCR + 文档参考"}[x],
     horizontal=True,
     key="mode_radio",
 )
@@ -219,6 +219,72 @@ if st.session_state.mode == "ocr":
                 file_name=f"ocr_{ocr_mode}_{Path(uploaded.name).stem}.txt",
                 mime="text/plain",
             )
+
+# ======================== 多模态 OCR + RAG 模式 ========================
+if st.session_state.mode == "mm_rag":
+    st.subheader("🖼️ 多模态 OCR + 文档参考")
+    st.caption("上传题图 → OCR 提题面 → RAG 找项目文档参考 → LLM 综合解答")
+
+    mm_uploaded = st.file_uploader(
+        "上传学生题目截图",
+        type=["jpg", "jpeg", "png", "webp", "gif", "bmp"],
+        key="mm_uploader",
+    )
+
+    mm_saved_path = None
+    if mm_uploaded is not None:
+        st.image(mm_uploaded, caption=mm_uploaded.name, width=400)
+        tmp_dir = Path(tempfile.gettempdir()) / "raglab_uploads"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        mm_saved_path = tmp_dir / mm_uploaded.name
+        mm_saved_path.write_bytes(mm_uploaded.getvalue())
+
+    if st.button("🖼️ OCR + 文档参考 解答", type="primary", use_container_width=True):
+        if mm_saved_path is None:
+            st.error("❌ 请先上传图片")
+        else:
+            with st.spinner("🤖 OCR 提题面 + RAG 找文档 + LLM 综合 (3 步, ~15-25s)..."):
+                t0 = time.time()
+                try:
+                    from agent import tool_multimodal_solve
+                    final_answer, sources, extracted_q = tool_multimodal_solve(
+                        str(mm_saved_path), qa
+                    )
+                    elapsed = time.time() - t0
+                except Exception as e:
+                    st.error(f"❌ 多模态错误: {type(e).__name__}: {e}")
+                    st.stop()
+
+            st.divider()
+            col_x, col_y = st.columns([4, 1])
+            with col_x:
+                st.markdown("### 🧠 综合解答")
+            with col_y:
+                st.metric("⏱️ 用时", f"{elapsed:.1f}s")
+                st.metric("📚 文档", len(sources))
+
+            if extracted_q:
+                with st.expander("📋 OCR 提取的题面", expanded=False):
+                    st.text(extracted_q)
+
+            st.markdown(final_answer)
+
+            if sources:
+                st.divider()
+                st.markdown(f"### 📚 参考文档 ({len(sources)} 个)")
+                for i, s in enumerate(sources, 1):
+                    src_name = s.metadata.get("source", "?").split("\\")[-1]
+                    with st.expander(f"[{i}] {src_name}", expanded=(i <= 3)):
+                        st.caption(f"路径: {s.metadata.get('source', '?')}")
+                        st.text(s.page_content[:800] + ("..." if len(s.page_content) > 800 else ""))
+
+            st.download_button(
+                "💾 下载解答",
+                data=f"题面:\n{extracted_q}\n\n解答:\n{final_answer}",
+                file_name=f"mm_solve_{Path(mm_uploaded.name).stem}.txt",
+                mime="text/plain",
+            )
+
 
 # ======================== RAG 模式 ========================
 else:

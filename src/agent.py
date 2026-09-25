@@ -380,6 +380,79 @@ def tool_zhipu_ocr(image_path: str, mode: str = "extract") -> str:
         return f"(zhipu_ocr error: {type(e).__name__}: {e})"
 
 
+def tool_multimodal_solve(image_path: str, qa_func) -> tuple[str, list, str]:
+    """**多模态 RAG 解题** - OCR 提题面 → RAG 找文档 → LLM 结合两者解答.
+
+    工作流:
+    1. OCR (extract 模式) 拿题面文字
+    2. 用题面文字当 query 调 RAG (qa_func), 拿文档片段
+    3. 把 (题面 + 文档片段) 喂给 LLM, 让它结合两者综合解答
+    4. 返回: (final_answer, sources, ocr_question)
+
+    参数:
+      image_path: 题图绝对路径
+      qa_func: ultimate_rag.make_ultimate_qa() 的 qa 函数 (question -> (answer, sources))
+
+    返回: (final_answer, sources, extracted_question_text)
+    """
+    # Step 1: OCR 提题面 (extract 模式, 不要 solve)
+    raw = tool_zhipu_ocr(image_path, mode="extract")
+
+    # 检查 OCR 是否成功
+    if raw.startswith("(zhipu_ocr error"):
+        return raw, [], ""
+
+    # 如果题面太短, 直接 OCR solve, 跳过 RAG
+    extracted = raw.strip()
+    if len(extracted) < 10 or "[无法识别]" in extracted:
+        # 回退到纯 OCR solve
+        answer = tool_zhipu_ocr(image_path, mode="solve")
+        return f"⚠️ OCR 识别题面不完整, 仅靠图片识别解答:\n\n{answer}", [], extracted
+
+    # Step 2: RAG 用题面检索
+    try:
+        rag_answer, sources = qa_func(extracted)
+    except Exception as e:
+        rag_answer, sources = "", []
+        print(f"[multimodal] RAG search failed: {e}")
+
+    # Step 3: 把题面 + RAG 片段喂给 LLM 综合
+    import os
+    from langchain_openai import ChatOpenAI
+    api_key = os.environ.get("DEEPSEEK_API_KEY")
+    if not api_key:
+        return "(multimodal error: 缺 DEEPSEEK_API_KEY)", sources, extracted
+
+    llm = ChatOpenAI(
+        model="deepseek-chat", temperature=0.1,
+        base_url="https://api.deepseek.com/v1",
+        api_key=api_key, timeout=120,
+    )
+
+    # 截断 RAG 答案, 避免 prompt 太大
+    rag_snippet = (rag_answer or "")[:3000] if rag_answer else "（RAG 没找到相关文档）"
+
+    synthesis_prompt = (
+        "你是一名解题助手. 学生发了一道题 (从图片 OCR 提取) 和相关参考文档.\n"
+        "请结合参考文档解答学生的问题. 如果参考文档不相关或答案不可靠, 用你自己的知识回答.\n\n"
+        f"【题面】\n{extracted}\n\n"
+        f"【参考文档】\n{rag_snippet}\n\n"
+        "输出要求:\n"
+        "- 直接给答案, 不要分步骤说'我已经分析了题面'这种\n"
+        "- 如果参考文档有相关解答, 引用要点\n"
+        "- 用 LaTeX 写公式 (例: $\\frac{a}{b}$)\n"
+        "- (1)(2)(3) 分小题作答\n"
+    )
+
+    try:
+        resp = llm.invoke(synthesis_prompt)
+        final_answer = resp.content if hasattr(resp, 'content') else str(resp)
+    except Exception as e:
+        final_answer = f"(multimodal synthesis error: {type(e).__name__}: {e})"
+
+    return final_answer, sources, extracted
+
+
 # ======================== Agent ========================
 
 SYSTEM_PROMPT = """你是 Web Agent (Phase 2 + OCR). 用 4 个工具回答问题:
