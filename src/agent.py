@@ -497,7 +497,7 @@ def tool_multimodal_solve_stream(image_path: str, qa_func):
         model="deepseek-chat", temperature=0.1,
         base_url="https://api.deepseek.com/v1",
         api_key=api_key, timeout=120,
-    ).bind(streaming=True)
+    )
 
     rag_snippet = (rag_answer or "")[:3000] if rag_answer else "（RAG 没找到相关文档）"
     synthesis_prompt = (

@@ -239,8 +239,6 @@ def make_ultimate_qa_stream(index, multi_chain, hyde_chain, reranker, llm, max_c
     if max_context_chars is None:
         max_context_chars = int(os.getenv("MAX_CONTEXT_CHARS", "50000"))
 
-    llm_stream = llm.bind(streaming=True)
-
     def qa_stream(question):
         # 1. multi-query (阻塞, ~1s)
         multi_str = multi_chain.invoke({"question": question})
@@ -266,8 +264,9 @@ def make_ultimate_qa_stream(index, multi_chain, hyde_chain, reranker, llm, max_c
         log.info(f"[Context stream] {len(parts)} chunks, {total} chars")
 
         # 5. 包装 LLM streaming chunks 成 generator
+        # 注意: ChatOpenAI.stream() 自动处理 streaming=True, 不要 bind()
         def chunk_gen():
-            for chunk in llm_stream.stream(ANSWER_PROMPT.format_messages(context=context, question=question)):
+            for chunk in llm.stream(ANSWER_PROMPT.format_messages(context=context, question=question)):
                 content = chunk.content if hasattr(chunk, 'content') else str(chunk)
                 if content:
                     yield content
