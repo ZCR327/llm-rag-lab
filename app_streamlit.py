@@ -2,7 +2,7 @@
 """
 app_streamlit.py — RAG + OCR 交互式 Web UI (Streamlit v2)
 
-启动: streamlit run D:\.minimax\.minimax\projects\llm-rag-lab\app_streamlit.py
+启动: streamlit run app_streamlit.py
 默认: http://localhost:8501
 
 v2 新增:
@@ -23,6 +23,16 @@ if sys.platform == "win32":
         sys.stdout.reconfigure(encoding="utf-8")
     except Exception:
         pass
+
+# Streamlit Cloud secrets 同步到 os.environ
+# (Cloud UI 的 Secrets 是 st.secrets, 不是 env vars; ultimate_rag.py 用 os.getenv 会拿不到)
+try:
+    import streamlit as st
+    for _secret_key in ("DEEPSEEK_API_KEY", "ZHIPU_API_KEY"):
+        if _secret_key in st.secrets and not os.environ.get(_secret_key):
+            os.environ[_secret_key] = st.secrets[_secret_key]
+except Exception:
+    pass  # 非 Streamlit 运行环境 (本地 CLI) 跳过
 
 # 把 src/ 加到 sys.path (Streamlit 不会自动加)
 SRC_DIR = Path(__file__).parent / "src"
