@@ -453,6 +453,74 @@ def tool_multimodal_solve(image_path: str, qa_func) -> tuple[str, list, str]:
     return final_answer, sources, extracted
 
 
+def tool_multimodal_solve_stream(image_path: str, qa_func):
+    """v0.1.20: tool_multimodal_solve 的 streaming 版本.
+
+    同样: OCR → RAG → LLM 综合. 但 LLM 综合这一步 yield chunks.
+
+    返回: (chunks_generator, sources, extracted_question)
+    """
+    # Step 1: OCR (阻塞, ~3-5s for 智谱)
+    raw = tool_zhipu_ocr(image_path, mode="extract")
+    if raw.startswith("(zhipu_ocr error"):
+        def err_gen():
+            yield raw
+        return err_gen(), [], ""
+
+    extracted = raw.strip()
+    if len(extracted) < 10 or "[无法识别]" in extracted:
+        # fallback: 流式 OCR solve
+        answer = tool_zhipu_ocr(image_path, mode="solve")
+        fallback_msg = f"⚠️ OCR 识别题面不完整, 仅靠图片识别解答:\n\n{answer}\n\n"
+        def fallback_gen():
+            for line in fallback_msg.split('\n'):
+                yield line + '\n'
+        return fallback_gen(), [], extracted
+
+    # Step 2: RAG 检索 (阻塞, ~2s)
+    try:
+        rag_answer, sources = qa_func(extracted)
+    except Exception as e:
+        rag_answer, sources = "", []
+        print(f"[multimodal stream] RAG search failed: {e}")
+
+    # Step 3: 流式 LLM 综合
+    import os as _os
+    from langchain_openai import ChatOpenAI as _ChatOpenAI
+    api_key = _os.environ.get("DEEPSEEK_API_KEY")
+    if not api_key:
+        def err_gen():
+            yield "(multimodal stream error: 缺 DEEPSEEK_API_KEY)"
+        return err_gen(), sources, extracted
+
+    llm = _ChatOpenAI(
+        model="deepseek-chat", temperature=0.1,
+        base_url="https://api.deepseek.com/v1",
+        api_key=api_key, timeout=120,
+    ).bind(streaming=True)
+
+    rag_snippet = (rag_answer or "")[:3000] if rag_answer else "（RAG 没找到相关文档）"
+    synthesis_prompt = (
+        "你是一名解题助手. 学生发了一道题 (从图片 OCR 提取) 和相关参考文档.\n"
+        "请结合参考文档解答学生的问题. 如果参考文档不相关或答案不可靠, 用你自己的知识回答.\n\n"
+        f"【题面】\n{extracted}\n\n"
+        f"【参考文档】\n{rag_snippet}\n\n"
+        "输出要求:\n"
+        "- 直接给答案, 不要分步骤说'我已经分析了题面'这种\n"
+        "- 如果参考文档有相关解答, 引用要点\n"
+        "- 用 LaTeX 写公式 (例: $\\frac{a}{b}$)\n"
+        "- (1)(2)(3) 分小题作答\n"
+    )
+
+    def chunk_gen():
+        for chunk in llm.stream(synthesis_prompt):
+            content = chunk.content if hasattr(chunk, 'content') else str(chunk)
+            if content:
+                yield content
+
+    return chunk_gen(), sources, extracted
+
+
 # ======================== Agent ========================
 
 SYSTEM_PROMPT = """你是 Web Agent (Phase 2 + OCR). 用 4 个工具回答问题:

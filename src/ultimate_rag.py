@@ -229,6 +229,53 @@ def make_ultimate_qa(index, multi_chain, hyde_chain, reranker, llm, max_context_
     return qa
 
 
+def make_ultimate_qa_stream(index, multi_chain, hyde_chain, reranker, llm, max_context_chars=None):
+    """v0.1.20: streaming 版本 — 同样的 multi-query + hyde + rerank, 但 LLM streaming 输出.
+
+    返回的 qa_stream(question) 返回 (chunks_generator, sources):
+    - chunks_generator: yield LLM 回答 chunks (给 st.write_stream)
+    - sources: 检索到的 docs (回答完后展示)
+    """
+    if max_context_chars is None:
+        max_context_chars = int(os.getenv("MAX_CONTEXT_CHARS", "50000"))
+
+    llm_stream = llm.bind(streaming=True)
+
+    def qa_stream(question):
+        # 1. multi-query (阻塞, ~1s)
+        multi_str = multi_chain.invoke({"question": question})
+        log.info(f"[MultiRewrite stream] {multi_str}")
+
+        # 2. hyde (阻塞, ~1s)
+        hyde_terms = hyde_chain.invoke({"question": question})
+        log.info(f"[HyDE 保守 stream] {hyde_terms[:100]}")
+
+        # 3. 合并检索 (阻塞, ~1-2s)
+        docs = retrieve_ultimate(index, multi_str, hyde_terms, reranker)
+
+        # 4. 拼 context (同步, 几乎免费)
+        parts = []
+        total = 0
+        for i, doc in enumerate(docs):
+            chunk = f"[{i+1}] {doc.page_content}"
+            if total + len(chunk) > max_context_chars:
+                break
+            parts.append(chunk)
+            total += len(chunk)
+        context = "\n\n---\n\n".join(parts)
+        log.info(f"[Context stream] {len(parts)} chunks, {total} chars")
+
+        # 5. 包装 LLM streaming chunks 成 generator
+        def chunk_gen():
+            for chunk in llm_stream.stream(ANSWER_PROMPT.format_messages(context=context, question=question)):
+                content = chunk.content if hasattr(chunk, 'content') else str(chunk)
+                if content:
+                    yield content
+
+        return chunk_gen(), docs
+    return qa_stream
+
+
 def main():
     log.info("初始化 Ultimate RAG (v0.1.14)...")
     index, _n_docs, _n_chunks = build_or_load_index()

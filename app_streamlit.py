@@ -57,7 +57,8 @@ def load_rag():
     from langchain_openai import ChatOpenAI
     from ultimate_rag import (
         build_or_load_index, make_multi_query_chain,
-        make_hyde_conservative_chain, make_reranker, make_ultimate_qa,
+        make_hyde_conservative_chain, make_reranker,
+        make_ultimate_qa, make_ultimate_qa_stream,
     )
 
     if not os.environ.get("DEEPSEEK_API_KEY"):
@@ -73,11 +74,12 @@ def load_rag():
             api_key=os.environ["DEEPSEEK_API_KEY"],
             timeout=120,
         )
-        qa = make_ultimate_qa(
-            idx, make_multi_query_chain(llm),
-            make_hyde_conservative_chain(llm), make_reranker(), llm,
-        )
-    return idx, llm, qa
+        multi_chain = make_multi_query_chain(llm)
+        hyde_chain = make_hyde_conservative_chain(llm)
+        reranker = make_reranker()
+        qa = make_ultimate_qa(idx, multi_chain, hyde_chain, reranker, llm)
+        qa_stream = make_ultimate_qa_stream(idx, multi_chain, hyde_chain, reranker, llm)
+    return idx, llm, qa, qa_stream
 
 
 @st.cache_resource
@@ -99,7 +101,7 @@ st.title("🔍 RAG Lab — ZCR327/llm-rag-lab")
 st.caption(f"DeepSeek 128K × TopK={int(os.getenv('TOP_K_PER_QUERY', '8'))} × TopN={TOP_N_FINAL} × MaxCtxChars={MAX_CONTEXT_CHARS} | + 智谱 GLM-4V OCR")
 
 # 加载
-idx, llm, qa = load_rag()
+idx, llm, qa, qa_stream = load_rag()
 ocr_func = load_ocr()
 n_docs = len(list((Path(__file__).parent / "data" / "raw").iterdir()))
 
@@ -243,31 +245,34 @@ if st.session_state.mode == "mm_rag":
         if mm_saved_path is None:
             st.error("❌ 请先上传图片")
         else:
-            with st.spinner("🤖 OCR 提题面 + RAG 找文档 + LLM 综合 (3 步, ~15-25s)..."):
-                t0 = time.time()
-                try:
-                    from agent import tool_multimodal_solve
-                    final_answer, sources, extracted_q = tool_multimodal_solve(
-                        str(mm_saved_path), qa
-                    )
-                    elapsed = time.time() - t0
-                except Exception as e:
-                    st.error(f"❌ 多模态错误: {type(e).__name__}: {e}")
-                    st.stop()
-
             st.divider()
             col_x, col_y = st.columns([4, 1])
             with col_x:
                 st.markdown("### 🧠 综合解答")
             with col_y:
+                st.metric("⏱️ 用时", "streaming...")
+                sources_placeholder = st.empty()
+
+            # v0.1.20: streaming — OCR + RAG 同步阻塞, LLM 综合这一步 stream
+            try:
+                t0 = time.time()
+                from agent import tool_multimodal_solve_stream
+                chunk_gen, sources, extracted_q = tool_multimodal_solve_stream(
+                    str(mm_saved_path), qa
+                )
+                full_answer = st.write_stream(chunk_gen)
+                elapsed = time.time() - t0
+            except Exception as e:
+                st.error(f"❌ 多模态错误: {type(e).__name__}: {e}")
+                st.stop()
+
+            with col_y:
                 st.metric("⏱️ 用时", f"{elapsed:.1f}s")
-                st.metric("📚 文档", len(sources))
+            sources_placeholder.metric("📚 文档", len(sources))
 
             if extracted_q:
                 with st.expander("📋 OCR 提取的题面", expanded=False):
                     st.text(extracted_q)
-
-            st.markdown(final_answer)
 
             if sources:
                 st.divider()
@@ -280,7 +285,7 @@ if st.session_state.mode == "mm_rag":
 
             st.download_button(
                 "💾 下载解答",
-                data=f"题面:\n{extracted_q}\n\n解答:\n{final_answer}",
+                data=f"题面:\n{extracted_q}\n\n解答:\n{full_answer or ''}",
                 file_name=f"mm_solve_{Path(mm_uploaded.name).stem}.txt",
                 mime="text/plain",
             )
@@ -305,24 +310,29 @@ else:
         st.rerun()
 
     if ask_btn and question.strip():
-        with st.spinner(f"🔍 检索 + 生成中... (TopN={TOP_N_FINAL})"):
-            t0 = time.time()
-            try:
-                answer, sources = qa(question)
-                elapsed = time.time() - t0
-            except Exception as e:
-                st.error(f"❌ RAG 错误: {type(e).__name__}: {e}")
-                st.stop()
-
         st.divider()
         col_a, col_b = st.columns([4, 1])
         with col_a:
             st.markdown("### 💡 答案")
         with col_b:
-            st.metric("⏱️ 用时", f"{elapsed:.1f}s")
-            st.metric("📚 Sources", len(sources))
+            st.metric("⏱️ 用时", "streaming...")
+            sources_placeholder = st.empty()
 
-        st.markdown(answer)
+        # v0.1.20: streaming — LLM 输出逐 token 显示
+        try:
+            t0 = time.time()
+            chunk_gen, sources = qa_stream(question)
+            # st.write_stream 自动边生成边刷新 UI
+            full_answer = st.write_stream(chunk_gen)
+            elapsed = time.time() - t0
+        except Exception as e:
+            st.error(f"❌ RAG 错误: {type(e).__name__}: {e}")
+            st.stop()
+
+        # 更新用时 + 来源数
+        with col_b:
+            st.metric("⏱️ 用时", f"{elapsed:.1f}s")
+        sources_placeholder.metric("📚 Sources", len(sources))
 
         if sources:
             st.divider()
