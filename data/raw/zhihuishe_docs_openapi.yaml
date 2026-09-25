@@ -1,0 +1,460 @@
+# OpenAPI 3.0 规范 - 积分系统
+openapi: 3.0.3
+info:
+  title: 积分系统 API
+  description: 积分系统RESTful API接口文档
+  version: 5.9.0
+  contact:
+    name: 积分系统开发团队
+servers:
+  - url: http://localhost:5000/api/v1
+    description: 本地开发服务器
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+  schemas:
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+        username:
+          type: string
+        points:
+          type: integer
+        role:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    PointsOperation:
+      type: object
+      properties:
+        user_id:
+          type: integer
+        points:
+          type: integer
+        reason:
+          type: string
+    Ranking:
+      type: object
+      properties:
+        rank:
+          type: integer
+        user_id:
+          type: integer
+        username:
+          type: string
+        points:
+          type: integer
+        level:
+          type: string
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+        code:
+          type: integer
+
+paths:
+  /auth/login:
+    post:
+      tags: [认证]
+      summary: 用户登录
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username:
+                  type: string
+                password:
+                  type: string
+      responses:
+        '200':
+          description: 登录成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  token:
+                    type: string
+                  user:
+                    $ref: '#/components/schemas/User'
+        '401':
+          description: 认证失败
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /auth/verify-2fa:
+    post:
+      tags: [认证]
+      summary: 双因素认证验证
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_id, token]
+              properties:
+                user_id:
+                  type: integer
+                token:
+                  type: string
+      responses:
+        '200':
+          description: 验证成功
+        '400':
+          description: 验证码无效
+
+  /users:
+    get:
+      tags: [用户]
+      summary: 获取用户列表
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: role
+          in: query
+          schema:
+            type: string
+        - name: keyword
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/User'
+    post:
+      tags: [用户]
+      summary: 创建用户
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username:
+                  type: string
+                password:
+                  type: string
+                role:
+                  type: string
+                  default: user
+                initial_points:
+                  type: integer
+                  default: 0
+      responses:
+        '201':
+          description: 创建成功
+        '400':
+          description: 参数错误
+
+  /users/{id}:
+    get:
+      tags: [用户]
+      summary: 获取用户详情
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: 成功
+        '404':
+          description: 用户不存在
+    put:
+      tags: [用户]
+      summary: 更新用户
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                points:
+                  type: integer
+                role:
+                  type: string
+      responses:
+        '200':
+          description: 更新成功
+    delete:
+      tags: [用户]
+      summary: 删除用户
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: 删除成功
+
+  /points/add:
+    post:
+      tags: [积分]
+      summary: 添加积分
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PointsOperation'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  points_before:
+                    type: integer
+                  points_after:
+                    type: integer
+
+  /points/reduce:
+    post:
+      tags: [积分]
+      summary: 减少积分
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PointsOperation'
+      responses:
+        '200':
+          description: 成功
+        '400':
+          description: 积分不足
+
+  /points/transfer:
+    post:
+      tags: [积分]
+      summary: 积分转账
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [from_user_id, to_user_id, points]
+              properties:
+                from_user_id:
+                  type: integer
+                to_user_id:
+                  type: integer
+                points:
+                  type: integer
+                reason:
+                  type: string
+      responses:
+        '200':
+          description: 转账成功
+
+  /points/{user_id}:
+    get:
+      tags: [积分]
+      summary: 查询用户积分
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: 成功
+
+  /rankings/points:
+    get:
+      tags: [排行榜]
+      summary: 获取积分排行榜
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: type
+          in: query
+          schema:
+            type: string
+            enum: [weekly, monthly, all_time]
+            default: all_time
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  rankings:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Ranking'
+
+  /notifications:
+    get:
+      tags: [通知]
+      summary: 获取通知列表
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: user_id
+          in: query
+          schema:
+            type: integer
+        - name: unread_only
+          in: query
+          schema:
+            type: boolean
+    post:
+      tags: [通知]
+      summary: 发送通知
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                user_id:
+                  type: integer
+                title:
+                  type: string
+                content:
+                  type: string
+                type:
+                  type: string
+      responses:
+        '200':
+          description: 发送成功
+
+  /export/users:
+    get:
+      tags: [数据导出]
+      summary: 导出用户数据
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: format
+          in: query
+          schema:
+            type: string
+            enum: [csv, xlsx, json]
+            default: csv
+responses:
+        '200':
+          description: 文件下载
+          content:
+            application/octet-stream:
+              type: string
+              format: binary
+
+  /health:
+    get:
+      tags: [系统]
+      summary: 健康检查
+      responses:
+        '200':
+          description: 系统正常
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  version:
+                    type: string
+
+  /stats:
+    get:
+      tags: [系统]
+      summary: 获取统计数据
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: 成功

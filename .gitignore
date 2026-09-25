@@ -12,11 +12,20 @@ dist/
 *.egg-info/
 *.egg
 
-# Data (raw corpora, large embeddings)
+# Data: raw/ 默认全忽略, 但白名单可公开的子集 (Streamlit Cloud 部署需要)
 data/raw/
-data/embeddings/
-*.faiss
-*.pkl
+!data/raw/ftc_*
+!data/raw/pedro_*
+!data/raw/737_max_mcas.md
+!data/raw/飞机基本原理*
+!data/raw/zhihuishe_README_INDEX.md
+!data/raw/zhihuishe_CHANGELOG.md
+!data/raw/zhihuishe_CONTRIBUTING.md
+!data/raw/zhihuishe_docs_*
+
+# Embeddings: FAISS index ~2MB 提交到 git, 部署到 Streamlit Cloud 直接用, 不用每次 cold-start 重建
+# (bge-reranker 模型太大 2.16GB, 留在 models/ 仍 ignore, 部署时 sentence-transformers 自动下)
+# *.faiss / *.pkl 不全局 ignore, 让 data/embeddings/*.faiss + *.pkl 提交
 *.npy
 *.npz
 

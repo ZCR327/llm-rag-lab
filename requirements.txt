@@ -18,8 +18,20 @@ unstructured>=0.13.0
 # ZhipuAI (embedding)
 zhipuai>=2.0.0
 
-# Web UI (optional)
+# Web UI
+streamlit>=1.30.0
 flask>=3.0.0
+
+# Web Agent (Phase 2) — agent.py 抓网页
+httpx>=0.27.0
+beautifulsoup4>=4.12.0
+
+# BGE reranker (sentence-transformers CrossEncoder)
+sentence-transformers>=3.0.0
+torch>=2.0.0
+
+# LangGraph (create_agent 需要的运行时)
+langgraph>=0.2.0
 
 # Config
 python-dotenv>=1.0.0

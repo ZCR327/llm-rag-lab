@@ -125,15 +125,21 @@ TOP_K_PER_QUERY={int(os.getenv('TOP_K_PER_QUERY', '8'))}""", language="bash")
     st.metric("RAG 答对率 (11 题 benchmark)", "91%")
 
 # ---- 模式选择 ----
+# 修复: 之前 st.session_state.mode = st.radio(...) 是双绑定写法
+# Streamlit widget 读 st.session_state.mode_radio, 跟 st.session_state.mode 不对齐
+# 第二次切模式会卡. 现在改成单向: widget 决定 mode, 再写回 session_state
 if "mode" not in st.session_state:
-    st.session_state.mode = "rag"  # rag 或 ocr
-st.session_state.mode = st.radio(
+    st.session_state.mode = "rag"
+mode_index = 0 if st.session_state.mode == "rag" else 1
+mode = st.radio(
     "🔀 模式",
     options=["rag", "ocr"],
+    index=mode_index,
     format_func=lambda x: "🔍 RAG 检索" if x == "rag" else "📷 OCR 题目截图",
     horizontal=True,
     key="mode_radio",
 )
+st.session_state.mode = mode
 
 st.divider()
 
