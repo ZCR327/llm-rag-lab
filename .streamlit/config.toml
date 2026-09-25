@@ -16,4 +16,4 @@ base = "dark"
 gatherUsageStats = false
 
 [logger]
-level = "warning"
+level = "info"
