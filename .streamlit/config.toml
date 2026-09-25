@@ -1,0 +1,19 @@
+# Streamlit production config (used by Streamlit Cloud)
+# 关掉文件监控: 生产环境不需要 hot-reload, 而且 transformers 的 torchvision 警告会刷屏
+[server]
+fileWatcherType = "none"
+headless = true
+# 加大上传限制 (学生题目图片可能 5-10MB)
+maxUploadSize = 50
+# 跨域 (Cloud 必需)
+enableCORS = false
+enableXsrfProtection = false
+
+[theme]
+base = "dark"
+
+[browser]
+gatherUsageStats = false
+
+[logger]
+level = "warning"
