@@ -316,6 +316,29 @@ def tool_zhipu_ocr(image_path: str, mode: str = "extract") -> str:
     if mode not in ("extract", "solve"):
         return f"(zhipu_ocr error: mode 必须是 extract/solve, 收到 {mode!r})"
 
+    # 图片压缩: 智谱 GLM-4V 拒收 >4MB base64 / 太大图片, 自动 resize 到 1600px 长边 + JPEG 92%
+    img_bytes = img_path.read_bytes()
+    if len(img_bytes) > 2_000_000:  # 2MB 阈值
+        try:
+            from io import BytesIO
+            from PIL import Image
+            with Image.open(img_path) as im:
+                # 长边缩到 1600px (智谱 vision 模型常见上限)
+                im.thumbnail((1600, 1600), Image.Resampling.LANCZOS)
+                buf = BytesIO()
+                im = im.convert("RGB") if im.mode in ("RGBA", "LA", "P") else im
+                im.save(buf, format="JPEG", quality=92)
+                img_bytes = buf.getvalue()
+                mime = "image/jpeg"
+        except Exception as e:
+            return f"(zhipu_ocr error: 图片压缩失败 ({type(e).__name__}: {e}))"
+    else:
+        mime, _ = mimetypes.guess_type(str(img_path))
+        if mime is None:
+            ext = img_path.suffix.lower()
+            mime = {".jpg":"image/jpeg",".jpeg":"image/jpeg",".png":"image/png",
+                    ".webp":"image/webp",".gif":"image/gif",".bmp":"image/bmp"}.get(ext, "image/jpeg")
+
     # 提示词 (跟 zhipu_ocr.py 同步)
     prompts = {
         "extract": (
@@ -337,16 +360,11 @@ def tool_zhipu_ocr(image_path: str, mode: str = "extract") -> str:
         from zhipuai import ZhipuAI
         client = ZhipuAI(api_key=api_key)
 
-        mime, _ = mimetypes.guess_type(str(img_path))
-        if mime is None:
-            ext = img_path.suffix.lower()
-            mime = {".jpg":"image/jpeg",".jpeg":"image/jpeg",".png":"image/png",
-                    ".webp":"image/webp",".gif":"image/gif",".bmp":"image/bmp"}.get(ext, "image/jpeg")
-        b64 = base64.b64encode(img_path.read_bytes()).decode("ascii")
+        b64 = base64.b64encode(img_bytes).decode("ascii")
         data_url = f"data:{mime};base64,{b64}"
 
         resp = client.chat.completions.create(
-            model="glm-4v-flash",
+            model="glm-4v",  # 不用 flash: flash 在某些条件下返 code 1210
             messages=[{
                 "role": "user",
                 "content": [
