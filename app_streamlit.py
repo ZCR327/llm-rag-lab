@@ -89,6 +89,32 @@ def load_ocr():
     return tool_zhipu_ocr
 
 
+@st.cache_resource
+def load_web_agent():
+    """懒加载 Web Agent (ReAct + 4 tools: rag_search / zhipu_ocr / search_web / fetch_url)"""
+    from langchain_openai import ChatOpenAI
+    from langchain.agents import create_agent
+    from agent import (
+        tool_rag_search, tool_zhipu_ocr, tool_search_web, tool_fetch_url,
+        SYSTEM_PROMPT,
+    )
+
+    llm = ChatOpenAI(
+        model="deepseek-chat", temperature=0,
+        base_url="https://api.deepseek.com/v1",
+        api_key=os.environ["DEEPSEEK_API_KEY"],
+        timeout=120,
+    )
+    tools = [tool_rag_search, tool_zhipu_ocr, tool_search_web, tool_fetch_url]
+    agent = create_agent(
+        model=llm,
+        tools=tools,
+        system_prompt=SYSTEM_PROMPT,
+        debug=False,
+    )
+    return agent
+
+
 # ---- 页面 ----
 st.set_page_config(
     page_title="RAG Lab — 24306",
@@ -142,12 +168,15 @@ TOP_K_PER_QUERY={int(os.getenv('TOP_K_PER_QUERY', '8'))}""", language="bash")
 # 第二次切模式会卡. 现在改成单向: widget 决定 mode, 再写回 session_state
 if "mode" not in st.session_state:
     st.session_state.mode = "rag"
-mode_index = {"rag": 0, "ocr": 1, "mm_rag": 2}.get(st.session_state.mode, 0)
+mode_index = {"rag": 0, "ocr": 1, "mm_rag": 2, "agent": 3}.get(st.session_state.mode, 0)
 mode = st.radio(
     "🔀 模式",
-    options=["rag", "ocr", "mm_rag"],
+    options=["rag", "ocr", "mm_rag", "agent"],
     index=mode_index,
-    format_func=lambda x: {"rag":"🔍 RAG 检索", "ocr":"📷 纯 OCR", "mm_rag":"🖼️ OCR + 文档参考"}[x],
+    format_func=lambda x: {
+        "rag":"🔍 RAG 检索", "ocr":"📷 纯 OCR",
+        "mm_rag":"🖼️ OCR + 文档参考", "agent":"🤖 Web Agent"
+    }[x],
     horizontal=True,
     key="mode_radio",
 )
@@ -289,6 +318,110 @@ if st.session_state.mode == "mm_rag":
                 file_name=f"mm_solve_{Path(mm_uploaded.name).stem}.txt",
                 mime="text/plain",
             )
+
+
+# ======================== Web Agent 模式 ========================
+if st.session_state.mode == "agent":
+    st.subheader("🤖 Web Agent (ReAct)")
+    st.caption("LLM 自动选工具: RAG / OCR / Web Search / URL Fetch")
+
+    # 初始化 chat history
+    if "agent_msgs" not in st.session_state:
+        st.session_state.agent_msgs = []
+
+    # 图片上传 (传给 OCR 工具)
+    agent_img = st.file_uploader(
+        "📷 可选: 上传图片供 OCR 工具调用",
+        type=["jpg", "jpeg", "png", "webp", "gif", "bmp"],
+        key="agent_uploader",
+    )
+    img_path = None
+    if agent_img is not None:
+        tmp_dir = Path(tempfile.gettempdir()) / "raglab_uploads"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        img_path = tmp_dir / agent_img.name
+        img_path.write_bytes(agent_img.getvalue())
+        st.image(agent_img, caption=agent_img.name, width=300)
+        st.caption(f"💡 已上传图片, agent 看到时会自动调用 OCR. 路径: `{img_path}`")
+
+    # 历史消息渲染
+    for msg in st.session_state.agent_msgs:
+        role = msg.get("role", "assistant")
+        content = msg.get("content", "")
+        tool_calls = msg.get("tool_calls", [])
+        with st.chat_message(role):
+            if content:
+                st.markdown(content)
+            if tool_calls:
+                for tc in tool_calls:
+                    with st.expander(f"🔧 调用工具: {tc.get('name', '?')}", expanded=False):
+                        st.json(tc.get("args", {}))
+
+    # 用户输入
+    user_input = st.chat_input("💬 问 agent (中文)...", key="agent_input")
+    if user_input:
+        # 构造 user message, 如果有图片附加路径提示
+        user_text = user_input
+        if img_path:
+            user_text += f"\n\n[系统提示: 用户上传了一张图片, 路径是 `{img_path}`, 调 zhipu_ocr 工具时传这个路径]"
+
+        st.session_state.agent_msgs.append({"role": "user", "content": user_input})
+        with st.chat_message("user"):
+            st.markdown(user_input)
+
+        # 调 agent
+        agent = load_web_agent()
+        try:
+            with st.spinner("🤖 Agent 思考 + 调工具中... (最长 60s)"):
+                t0 = time.time()
+                result = agent.invoke(
+                    {"messages": [{"role": "user", "content": user_text}]},
+                    config={"recursion_limit": 20},
+                )
+                elapsed = time.time() - t0
+
+            # 提取所有消息 (包含 ai + tool)
+            messages = result.get("messages", [])
+            tool_calls_log = []
+            final_answer = ""
+            for m in messages:
+                m_type = getattr(m, 'type', None) or (m.get('role') if isinstance(m, dict) else None)
+                content = getattr(m, 'content', '') or (m.get('content') if isinstance(m, dict) else '')
+                # 提取 tool_calls (LangChain 1.x: tool_calls 字段)
+                tc = getattr(m, 'tool_calls', None) or []
+                if tc and m_type == 'ai':
+                    for t in tc:
+                        tool_calls_log.append({
+                            "name": getattr(t, 'name', '?') or t.get('name', '?'),
+                            "args": getattr(t, 'args', {}) or t.get('args', {}),
+                        })
+                if m_type == 'ai' and content and not tc:
+                    final_answer = content
+
+            st.session_state.agent_msgs.append({
+                "role": "assistant",
+                "content": final_answer,
+                "tool_calls": tool_calls_log,
+                "elapsed": elapsed,
+            })
+
+            with st.chat_message("assistant"):
+                if tool_calls_log:
+                    for tc in tool_calls_log:
+                        with st.expander(f"🔧 调了: {tc['name']}", expanded=False):
+                            st.json(tc["args"])
+                if final_answer:
+                    st.markdown(final_answer)
+                st.caption(f"⏱️ 用时 {elapsed:.1f}s")
+        except Exception as e:
+            st.error(f"❌ Agent 错误: {type(e).__name__}: {e}")
+
+    # 清空按钮
+    col1, _, _ = st.columns([1, 2, 4])
+    with col1:
+        if st.button("🗑️ 清空对话", use_container_width=True):
+            st.session_state.agent_msgs = []
+            st.rerun()
 
 
 # ======================== RAG 模式 ========================
