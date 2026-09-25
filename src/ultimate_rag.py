@@ -52,7 +52,11 @@ log = logging.getLogger("ultimate_rag")
 # --- config ---
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
-os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+# HF_ENDPOINT: 默认 huggingface.co (海外); 本地开发 .env 可设 hf-mirror.com 加速国内
+if not os.environ.get("HF_ENDPOINT"):
+    # 自动检测: 本地有 .env 用 hf-mirror, 部署到 Cloud 默认直连 HF
+    if (ROOT / ".env").exists():
+        os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 ZHIPU_API_KEY = os.getenv("ZHIPU_API_KEY")
@@ -63,7 +67,9 @@ if not DEEPSEEK_API_KEY or not ZHIPU_API_KEY:
 DATA_DIR = ROOT / "data" / "raw"
 INDEX_DIR = ROOT / "data" / "embeddings"
 INDEX_DIR.mkdir(parents=True, exist_ok=True)
-RERANKER_MODEL = str(ROOT / "models" / "bge-reranker-base")
+# 默认从 HuggingFace Hub 拉 (BAAI/bge-reranker-base, ~278MB), Streamlit Cloud 自动下载
+# 本地开发: .env 设 RERANKER_MODEL=D:\models\bge-reranker-base 走本地缓存
+RERANKER_MODEL = os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-base")
 TOP_K_PER_QUERY = int(os.getenv("TOP_K_PER_QUERY", "8"))  # v0.1.19: 大上下文需要更多候选 (3 个 query × 8 = 24 candidates)
 TOP_N_FINAL = int(os.getenv("TOP_N_FINAL", "20"))  # v0.1.19: 大上下文 (DeepSeek 128K / 4 tokens×1000chars=250/chunk → 20 chunks = 5K tokens = 上下文 ~5%)
 # MAX_CONTEXT_CHARS = int(os.getenv("MAX_CONTEXT_CHARS", "50000"))  # 50K chars 上下文 (~12K tokens, DeepSeek 安全区)
