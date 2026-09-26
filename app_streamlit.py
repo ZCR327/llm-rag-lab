@@ -91,12 +91,13 @@ def load_ocr():
 
 @st.cache_resource
 def load_web_agent():
-    """懒加载 Web Agent (ReAct + 4 tools: rag_search / zhipu_ocr / search_web / fetch_url)"""
+    """懒加载 Web Agent (ReAct + 8 tools: rag / ocr / bing / arxiv / wikipedia / github / search_all / fetch_url)"""
     from langchain_openai import ChatOpenAI
     from langchain.agents import create_agent
     from agent import (
-        tool_rag_search, tool_zhipu_ocr, tool_search_web, tool_fetch_url,
-        SYSTEM_PROMPT,
+        tool_rag_search, tool_zhipu_ocr, tool_search_web,
+        tool_search_arxiv, tool_search_wikipedia, tool_search_github,
+        tool_search_all, tool_fetch_url, SYSTEM_PROMPT,
     )
 
     llm = ChatOpenAI(
@@ -105,7 +106,16 @@ def load_web_agent():
         api_key=os.environ["DEEPSEEK_API_KEY"],
         timeout=120,
     )
-    tools = [tool_rag_search, tool_zhipu_ocr, tool_search_web, tool_fetch_url]
+    tools = [
+        tool_rag_search,
+        tool_zhipu_ocr,
+        tool_search_web,
+        tool_search_arxiv,
+        tool_search_wikipedia,
+        tool_search_github,
+        tool_search_all,
+        tool_fetch_url,
+    ]
     agent = create_agent(
         model=llm,
         tools=tools,

@@ -380,6 +380,159 @@ def tool_zhipu_ocr(image_path: str, mode: str = "extract") -> str:
         return f"(zhipu_ocr error: {type(e).__name__}: {e})"
 
 
+# ======================== 新增搜索工具 (arXiv / Wikipedia / GitHub) ========================
+
+def tool_search_arxiv(query: str, max_results: int = 5) -> str:
+    """**arXiv 学术论文搜索** - 适合查最新研究 / 算法数学推导 / 论文引用.
+
+    例子: 'Transformer attention 数学推导', 'SLAM 路径规划 2024', 'Bézier 曲线控制点'.
+    API: arxiv.org Atom feed (无需 key), 返回标题 + 作者 + abstract + PDF link.
+    """
+    import httpx as _hx
+    import urllib.parse as _up
+    try:
+        q = _up.quote(query)
+        url = f"http://export.arxiv.org/api/query?search_query=all:{q}&start=0&max_results={max_results}&sortBy=relevance&sortOrder=descending"
+        r = _hx.get(url, timeout=20.0, headers={"User-Agent": _UA})
+        r.raise_for_status()
+        # 简单解析 Atom XML
+        from xml.etree import ElementTree as ET
+        ns = {"a": "http://www.w3.org/2005/Atom"}
+        root = ET.fromstring(r.text)
+        entries = root.findall("a:entry", ns)
+        if not entries:
+            return f"(arXiv: 没找到 '{query}' 的相关论文)"
+        out = [f"📚 arXiv '{query}' 找到 {len(entries)} 篇:"]
+        for i, e in enumerate(entries, 1):
+            title = e.findtext("a:title", "", ns).strip().replace("\n", " ")
+            authors = ", ".join(a.findtext("a:name", "", ns) for a in e.findall("a:author", ns))
+            summary = e.findtext("a:summary", "", ns).strip().replace("\n", " ")[:400]
+            link = e.findtext("a:id", "", ns).strip()
+            pub = e.findtext("a:published", "", ns)[:10]
+            out.append(
+                f"\n[{i}] {title}\n"
+                f"    作者: {authors or '?'}\n"
+                f"    发布: {pub}\n"
+                f"    摘要: {summary}...\n"
+                f"    链接: {link}"
+            )
+        return "\n".join(out)
+    except Exception as e:
+        return f"(arXiv error: {type(e).__name__}: {e})"
+
+
+def tool_search_wikipedia(query: str, lang: str = "zh", sentences: int = 5) -> str:
+    """**Wikipedia 百科搜索** - 适合查常识 / 历史 / 概念解释.
+
+    例子: '蒙特卡罗方法', '737 MAX MCAS 系统', 'Bézier 曲线历史'.
+    API: REST summary endpoint (无需 key), 返回前 N 句摘要 + 链接.
+    lang: 'zh' (中文) / 'en' (英文). 国内一般可直连.
+    """
+    import httpx as _hx
+    import urllib.parse as _up
+    try:
+        q = _up.quote(query)
+        # 先搜索拿页面标题
+        search_url = f"https://{lang}.wikipedia.org/w/api.php?action=opensearch&search={q}&limit=3&format=json"
+        r = _hx.get(search_url, timeout=15.0, headers={"User-Agent": _UA})
+        r.raise_for_status()
+        data = r.json()
+        titles = data[1] if len(data) > 1 else []
+        if not titles:
+            return f"(Wikipedia({lang}): 没找到 '{query}' 的条目)"
+
+        # 拿第一个标题的 summary
+        page_url = f"https://{lang}.wikipedia.org/api/rest_v1/page/summary/{_up.quote(titles[0])}"
+        rp = _hx.get(page_url, timeout=15.0, headers={"User-Agent": _UA})
+        rp.raise_for_status()
+        pd = rp.json()
+        extract = pd.get("extract", "")[:1500]
+        url = pd.get("content_urls", {}).get("desktop", {}).get("page", "")
+        desc = pd.get("description", "")
+        out = [
+            f"📖 Wikipedia({lang}) '{query}':",
+            f"标题: {titles[0]}",
+            f"描述: {desc}",
+            f"\n摘要:\n{extract}",
+            f"\n链接: {url}",
+        ]
+        if len(titles) > 1:
+            out.append(f"\n其它相关条目: {', '.join(titles[1:])}")
+        return "\n".join(out)
+    except Exception as e:
+        return f"(Wikipedia error: {type(e).__name__}: {e})"
+
+
+def tool_search_github(query: str, max_results: int = 5) -> str:
+    """**GitHub 仓库搜索** - 适合查代码库 / README / 库使用示例.
+
+    例子: 'Pedro Pathing', 'langchain create_agent example', 'FTC SDK'.
+    API: GitHub REST search/repositories (无需 key, 限速 60 req/h 匿名),
+    国内可能慢或被墙.
+    """
+    import httpx as _hx
+    import urllib.parse as _up
+    try:
+        q = _up.quote(query)
+        url = f"https://api.github.com/search/repositories?q={q}&per_page={max_results}&sort=stars&order=desc"
+        r = _hx.get(url, timeout=20.0, headers={
+            "User-Agent": _UA,
+            "Accept": "application/vnd.github+json",
+        })
+        r.raise_for_status()
+        data = r.json()
+        items = data.get("items", [])
+        if not items:
+            return f"(GitHub: 没找到 '{query}' 的仓库)"
+        out = [f"🐙 GitHub '{query}' 找到 {len(items)} 个仓库:"]
+        for i, repo in enumerate(items, 1):
+            out.append(
+                f"\n[{i}] {repo['full_name']} ⭐ {repo['stargazers_count']:,}\n"
+                f"    描述: {repo.get('description') or '(无)'}\n"
+                f"    语言: {repo.get('language') or '?'}\n"
+                f"    链接: {repo['html_url']}"
+            )
+        return "\n".join(out)
+    except Exception as e:
+        return f"(GitHub error: {type(e).__name__}: {e})"
+
+
+def tool_search_all(query: str) -> str:
+    """**多引擎聚合搜索** - 并发查 arXiv + Wikipedia + GitHub + cn.bing.com, 合并去重.
+
+    适合: 不确定该用哪个源, 或者问题跨多个领域 (理论 + 代码 + 百科).
+    注意: 调用 4 个 API 慢一些 (~10-20s), token 消耗稍多.
+    """
+    import concurrent.futures as _cf
+    print(f"[search_all] query: {query}")
+
+    searchers = [
+        ("🔍 cn.bing.com", tool_search_web),
+        ("📚 arXiv",       tool_search_arxiv),
+        ("📖 Wikipedia",   tool_search_wikipedia),
+        ("🐙 GitHub",      tool_search_github),
+    ]
+
+    results = {}
+    with _cf.ThreadPoolExecutor(max_workers=4) as ex:
+        future_to_name = {ex.submit(fn, query): name for name, fn in searchers}
+        for fut in _cf.as_completed(future_to_name, timeout=25.0):
+            name = future_to_name[fut]
+            try:
+                results[name] = fut.result(timeout=25.0)
+            except Exception as e:
+                results[name] = f"(error: {type(e).__name__}: {e})"
+
+    out = [f"🔎 多引擎聚合 '{query}':\n"]
+    for name, _ in searchers:  # 保持原始顺序
+        result = results.get(name, "(no result)")
+        # 截断太长的结果 (避免 LLM 上下文爆)
+        if len(result) > 1500:
+            result = result[:1500] + "\n...(截断)"
+        out.append(f"\n=== {name} ===\n{result}")
+    return "\n".join(out)
+
+
 def tool_multimodal_solve(image_path: str, qa_func) -> tuple[str, list, str]:
     """**多模态 RAG 解题** - OCR 提题面 → RAG 找文档 → LLM 结合两者解答.
 
@@ -523,19 +676,27 @@ def tool_multimodal_solve_stream(image_path: str, qa_func):
 
 # ======================== Agent ========================
 
-SYSTEM_PROMPT = """你是 Web Agent (Phase 2 + OCR). 用 4 个工具回答问题:
+SYSTEM_PROMPT = """你是 Web Agent (Phase 2 + OCR). 用 7 个工具回答问题:
 
 工具优先级 (严格遵守):
 1. **rag_search (优先)** - 本地 56 文档 (5 FTC + 1 飞机 + 50 智回社/FTC 笔记), 3-7 秒返回答案. FTC/机器人/比赛/智回社/路径规划相关问题**必须**先调它.
-2. **zhipu_ocr (新增)** - 智谱 GLM-4V 多模态 OCR. 适合学生题目截图 (含公式用 LaTeX, 可顺便解题).
-3. **search_web** - 本地答不了/查最新信息时用. cn.bing.com 国内直连.
-4. **fetch_url** - 拿到 URL 后深入读正文.
+2. **zhipu_ocr** - 智谱 GLM-4V 多模态 OCR. 适合学生题目截图 (含公式用 LaTeX, 可顺便解题).
+3. **search_web** - cn.bing.com 国内直连, 查最新信息/新闻/产品.
+4. **search_arxiv** - 学术论文搜索 (无 key). 适合查数学推导/算法 paper/最新研究.
+5. **search_wikipedia** - 百科知识 (无 key, 中英文). 适合查概念/历史/常识.
+6. **search_github** - 仓库搜索 (无 key, 限速 60/h). 适合查代码库/README/库用法.
+7. **search_all** - **多引擎聚合** (并发 arXiv + Wikipedia + GitHub + bing). 不确定用哪个就调它, 但慢 (~10-20s).
+8. **fetch_url** - 拿到 URL 后深入读正文.
 
 收敛策略:
 - **FTC / 机器人 / 比赛 / 计分 / 路径规划 / 视觉 / RAG / Pedro / 智回社** 相关 → 先调 rag_search (本地几乎都有答案)
 - **题目截图 OCR / 解题** → zhipu_ocr (image_path 必传绝对路径)
-- **最新新闻 / 论文 / 论文版本 / 软件下载 / 2026-2027 新版** → search_web
-- **拿到 URL 但要详情** → fetch_url (但不要连续 fetch 多个 URL, 1 个就够了)
+- **学术 / 论文 / 算法数学** → search_arxiv
+- **百科 / 历史 / 概念** → search_wikipedia
+- **代码库 / 库用法 / README** → search_github
+- **不确定 / 跨领域** → search_all (一次查所有)
+- **最新新闻 / 产品 / 软件下载** → search_web
+- **拿到 URL 后要详情** → fetch_url (1 个 URL 够了)
 - **总计最多 4 次工具调用**, 超过就停止搜, 给出已知信息 + "需要查更多请换个关键词"
 
 输出格式:
@@ -562,7 +723,16 @@ def main():
     )
 
     # rag_search 排第一 - 让 LLM 系统提示优先看
-    tools = [tool_rag_search, tool_zhipu_ocr, tool_search_web, tool_fetch_url]
+    tools = [
+        tool_rag_search,
+        tool_zhipu_ocr,
+        tool_search_web,
+        tool_search_arxiv,
+        tool_search_wikipedia,
+        tool_search_github,
+        tool_search_all,
+        tool_fetch_url,
+    ]
     react_agent = create_agent(
         model=llm,
         tools=tools,
