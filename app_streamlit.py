@@ -222,6 +222,8 @@ TOP_K_PER_QUERY={int(os.getenv('TOP_K_PER_QUERY', '8'))}""", language="bash")
         from billing import check_subscription, create_checkout, create_portal
         sub = check_subscription(sub_email)
         status = sub.get("status", "none")
+        # v0.1.23: 缓存 Pro 状态, 避免每次查询都打 Worker
+        st.session_state.pro_status = status
         if status == "active":
             st.success(f"✅ Pro 订阅中")
             period_end = sub.get("current_period_end")
@@ -244,6 +246,19 @@ TOP_K_PER_QUERY={int(os.getenv('TOP_K_PER_QUERY', '8'))}""", language="bash")
                 st.error(f"订阅服务连接失败: {checkout_url}")
     else:
         st.caption("填邮箱开通 Pro 订阅, 或下方填自己的 API Key")
+
+    # v0.1.23: 免费用户每日 quota 显示
+    from quota import get_quota_status, FREE_DAILY_LIMIT
+    qs = get_quota_status()
+    pro_active = st.session_state.get("pro_status", "none") == "active"
+    has_byok_now = bool(user_ds and user_zp)
+    if pro_active:
+        st.metric("💎 今日查询", f"{qs['count']} (Pro 无限)")
+    elif has_byok_now:
+        st.metric("🔑 今日查询", f"{qs['count']} (BYOK 无限)")
+    else:
+        st.metric("今日查询 (免费)", f"{qs['count']} / {FREE_DAILY_LIMIT}")
+        st.progress(min(qs['count'] / FREE_DAILY_LIMIT, 1.0))
 
 # ---- 模式选择 ----
 # 修复: 之前 st.session_state.mode = st.radio(...) 是双绑定写法
@@ -357,6 +372,16 @@ if st.session_state.mode == "mm_rag":
         if mm_saved_path is None:
             st.error("❌ 请先上传图片")
         else:
+            # v0.1.23: 限额检查
+            from quota import check_can_query, increment_quota
+            has_byok = bool(user_ds and user_zp)
+            pro_status = st.session_state.get("pro_status", "none")
+            is_pro = pro_status == "active"
+            can, reason = check_can_query(has_byok, is_pro)
+            if not can:
+                st.error(f"🚫 {reason}")
+                st.stop()
+
             st.divider()
             col_x, col_y = st.columns([4, 1])
             with col_x:
@@ -544,6 +569,18 @@ else:
         st.rerun()
 
     if ask_btn and question.strip():
+        # v0.1.23: 限额检查 (BYOK / Pro 不限, Free 10/天)
+        from quota import check_can_query, increment_quota, get_quota_status
+        has_byok = bool(user_ds and user_zp)
+        # Pro 状态从 session 拿, 没有就当 free
+        pro_status = st.session_state.get("pro_status", "none")
+        is_pro = pro_status == "active"
+        can, reason = check_can_query(has_byok, is_pro)
+        if not can:
+            st.error(f"🚫 {reason}")
+            st.info("👆 侧边栏填自己的 API key 或订阅 Pro 继续")
+            st.stop()
+
         st.divider()
         col_a, col_b = st.columns([4, 1])
         with col_a:
@@ -567,6 +604,9 @@ else:
             st.session_state.cumulative_tokens_in += usage.get("llm_input_tokens", 0)
             st.session_state.cumulative_tokens_out += usage.get("llm_output_tokens", 0)
             st.session_state.cumulative_queries += 1
+            # v0.1.23: 免费用户 +1 计数 (BYOK / Pro 不计)
+            if not has_byok and not is_pro:
+                increment_quota()
         except Exception as e:
             st.error(f"❌ RAG 错误: {type(e).__name__}: {e}")
             st.stop()
