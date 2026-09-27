@@ -212,6 +212,39 @@ TOP_K_PER_QUERY={int(os.getenv('TOP_K_PER_QUERY', '8'))}""", language="bash")
     else:
         st.caption("⚠️ 用项目默认 key (按用量计费)")
 
+    # v0.1.22: 付费订阅 (Cloudflare Worker + Stripe)
+    st.divider()
+    st.header("💎 Pro 订阅")
+    sub_email = st.text_input("Email (订阅管理)", key="sub_email",
+                                placeholder="your@email.com",
+                                help="订阅和 BYOK 都用这邮箱. 只存在 session.")
+    if sub_email:
+        from billing import check_subscription, create_checkout, create_portal
+        sub = check_subscription(sub_email)
+        status = sub.get("status", "none")
+        if status == "active":
+            st.success(f"✅ Pro 订阅中")
+            period_end = sub.get("current_period_end")
+            if period_end:
+                import datetime as dt
+                end_date = dt.datetime.fromtimestamp(period_end).strftime("%Y-%m-%d")
+                st.caption(f"下次续费/到期: {end_date}")
+            cust_id = sub.get("customer_id")
+            if cust_id:
+                portal_url = create_portal(cust_id)
+                if portal_url and not portal_url.startswith("(error"):
+                    st.markdown(f"[⚙️ 管理订阅]({portal_url})")
+        else:
+            st.info(f"ℹ️ 状态: {status} (免费用户, 每次查询按用量计费)")
+            checkout_url = create_checkout(sub_email)
+            if checkout_url and not checkout_url.startswith("(error"):
+                st.markdown(f"[💎 升级 Pro]({checkout_url})")
+                st.caption("$5/月, 无限查询")
+            else:
+                st.error(f"订阅服务连接失败: {checkout_url}")
+    else:
+        st.caption("填邮箱开通 Pro 订阅, 或下方填自己的 API Key")
+
 # ---- 模式选择 ----
 # 修复: 之前 st.session_state.mode = st.radio(...) 是双绑定写法
 # Streamlit widget 读 st.session_state.mode_radio, 跟 st.session_state.mode 不对齐
