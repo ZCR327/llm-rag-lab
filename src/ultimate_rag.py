@@ -64,6 +64,38 @@ if not DEEPSEEK_API_KEY or not ZHIPU_API_KEY:
     log.error("DEEPSEEK_API_KEY 或 ZHIPU_API_KEY 没设")
     sys.exit(1)
 
+
+# ======================== 成本计算 (v0.1.21) ========================
+# 价格表 (¥ / 1K tokens). 这些是 2026 年的估算, 实际以官方为准.
+PRICING = {
+    "deepseek-chat": {"input": 0.001, "output": 0.002},  # DeepSeek-V3 缓存命中/未命中
+    "glm-4v":        {"input": 0.001, "output": 0.001},  # 智谱 GLM-4V
+    "glm-4v-flash":  {"input": 0.0001, "output": 0.0001},  # 智谱 flash (超便宜)
+    "embedding":     {"input": 0.0001, "output": 0},     # 智谱 embedding
+}
+
+
+def calc_cost(usage: dict) -> float:
+    """从 usage dict 算费用 (¥).
+
+    usage = {"llm_input_tokens": int, "llm_output_tokens": int, "embedding_tokens": int}
+
+    默认假设:
+    - LLM 用 deepseek-chat (主) + glm-4v (OCR)
+    - embedding 走智谱
+    """
+    cost = 0.0
+    inp = usage.get("llm_input_tokens", 0)
+    out = usage.get("llm_output_tokens", 0)
+    # DeepSeek 假设占 80%, 智谱占 20% (粗略; 实际 LLM 调用比例需更精细)
+    cost += (inp / 1000) * PRICING["deepseek-chat"]["input"] * 0.8
+    cost += (out / 1000) * PRICING["deepseek-chat"]["output"] * 0.8
+    cost += (inp / 1000) * PRICING["glm-4v"]["input"] * 0.2
+    cost += (out / 1000) * PRICING["glm-4v"]["output"] * 0.2
+    emb = usage.get("embedding_tokens", 0)
+    cost += (emb / 1000) * PRICING["embedding"]["input"]
+    return round(cost, 6)
+
 DATA_DIR = ROOT / "data" / "raw"
 INDEX_DIR = ROOT / "data" / "embeddings"
 INDEX_DIR.mkdir(parents=True, exist_ok=True)
@@ -199,13 +231,29 @@ def make_ultimate_qa(index, multi_chain, hyde_chain, reranker, llm, max_context_
     if max_context_chars is None:
         max_context_chars = int(os.getenv("MAX_CONTEXT_CHARS", "50000"))
 
+    def _track_tokens(resp, usage_out):
+        """提取 LLM response 的 token usage 累加"""
+        try:
+            usage = getattr(resp, 'usage_metadata', None) or getattr(resp, 'response_metadata', {}).get('token_usage')
+            if usage:
+                inp = usage.get('input_tokens', 0) or usage.get('prompt_tokens', 0) or 0
+                out = usage.get('output_tokens', 0) or usage.get('completion_tokens', 0) or 0
+                usage_out['llm_input_tokens'] = usage_out.get('llm_input_tokens', 0) + inp
+                usage_out['llm_output_tokens'] = usage_out.get('llm_output_tokens', 0) + out
+        except Exception:
+            pass
+
     def qa(question):
+        usage = {"llm_input_tokens": 0, "llm_output_tokens": 0, "embedding_tokens": 0}
+
         # 1. multi-query 拆 2 角度 (v0.1.15: 3→2, 提速)
-        multi_str = multi_chain.invoke({"question": question})
+        multi_resp = multi_chain.invoke({"question": question})
+        multi_str = multi_resp if isinstance(multi_resp, str) else (getattr(multi_resp, 'content', str(multi_resp)))
         log.info(f"[MultiRewrite] {multi_str}")
 
         # 2. hyde 保守版 (只列术语)
-        hyde_terms = hyde_chain.invoke({"question": question})
+        hyde_resp = hyde_chain.invoke({"question": question})
+        hyde_terms = hyde_resp if isinstance(hyde_resp, str) else (getattr(hyde_resp, 'content', str(hyde_resp)))
         log.info(f"[HyDE 保守] {hyde_terms[:100]}")
 
         # 3. 合并检索
@@ -225,27 +273,35 @@ def make_ultimate_qa(index, multi_chain, hyde_chain, reranker, llm, max_context_
 
         # 5. LLM 回答 (v0.1.6 老实 prompt)
         answer = llm.invoke(ANSWER_PROMPT.format_messages(context=context, question=question))
-        return answer.content, docs
+        # 估算 tokens (answer 不会返回 usage_metadata 直接, 用字符数估算 output tokens)
+        usage['llm_output_tokens'] += len(answer.content) // 2  # 1 token ≈ 2 chars (中文)
+
+        return answer.content, docs, usage
     return qa
 
 
 def make_ultimate_qa_stream(index, multi_chain, hyde_chain, reranker, llm, max_context_chars=None):
     """v0.1.20: streaming 版本 — 同样的 multi-query + hyde + rerank, 但 LLM streaming 输出.
 
-    返回的 qa_stream(question) 返回 (chunks_generator, sources):
+    返回的 qa_stream(question) 返回 (chunks_generator, sources, usage):
     - chunks_generator: yield LLM 回答 chunks (给 st.write_stream)
     - sources: 检索到的 docs (回答完后展示)
+    - usage: token 计数 (LLM 调用, 估算)
     """
     if max_context_chars is None:
         max_context_chars = int(os.getenv("MAX_CONTEXT_CHARS", "50000"))
 
     def qa_stream(question):
+        usage = {"llm_input_tokens": 0, "llm_output_tokens": 0, "embedding_tokens": 0}
+
         # 1. multi-query (阻塞, ~1s)
-        multi_str = multi_chain.invoke({"question": question})
+        multi_resp = multi_chain.invoke({"question": question})
+        multi_str = multi_resp if isinstance(multi_resp, str) else (getattr(multi_resp, 'content', str(multi_resp)))
         log.info(f"[MultiRewrite stream] {multi_str}")
 
         # 2. hyde (阻塞, ~1s)
-        hyde_terms = hyde_chain.invoke({"question": question})
+        hyde_resp = hyde_chain.invoke({"question": question})
+        hyde_terms = hyde_resp if isinstance(hyde_resp, str) else (getattr(hyde_resp, 'content', str(hyde_resp)))
         log.info(f"[HyDE 保守 stream] {hyde_terms[:100]}")
 
         # 3. 合并检索 (阻塞, ~1-2s)
@@ -263,15 +319,21 @@ def make_ultimate_qa_stream(index, multi_chain, hyde_chain, reranker, llm, max_c
         context = "\n\n---\n\n".join(parts)
         log.info(f"[Context stream] {len(parts)} chunks, {total} chars")
 
-        # 5. 包装 LLM streaming chunks 成 generator
+        # 估算 input tokens: context + question (~chars/2)
+        usage['llm_input_tokens'] = (total + len(question)) // 2
+
+        # 5. 包装 LLM streaming chunks 成 generator, 同时累计 output tokens
         # 注意: ChatOpenAI.stream() 自动处理 streaming=True, 不要 bind()
         def chunk_gen():
+            char_count = 0
             for chunk in llm.stream(ANSWER_PROMPT.format_messages(context=context, question=question)):
                 content = chunk.content if hasattr(chunk, 'content') else str(chunk)
                 if content:
+                    char_count += len(content)
                     yield content
+            usage['llm_output_tokens'] = char_count // 2  # 估算: 1 token ≈ 2 chars
 
-        return chunk_gen(), docs
+        return chunk_gen(), docs, usage
     return qa_stream
 
 

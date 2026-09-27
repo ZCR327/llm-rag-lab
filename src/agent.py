@@ -220,7 +220,7 @@ def tool_rag_search(query: str) -> str:
     """
     try:
         qa = _get_qa()  # 单例, 跨调用复用
-        answer, sources = qa(query)
+        answer, sources, _usage = qa(query)
         src_list = "\n".join(
             f"  [{i+1}] {s.metadata.get('source', '?').split(chr(92))[-1]}"
             for i, s in enumerate(sources)

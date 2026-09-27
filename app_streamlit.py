@@ -151,6 +151,31 @@ MAX_CONTEXT_CHARS={MAX_CONTEXT_CHARS}
 TOP_K_PER_QUERY={int(os.getenv('TOP_K_PER_QUERY', '8'))}""", language="bash")
     st.caption("改 .env 调优 → 重启 Streamlit")
 
+    # v0.1.21: BYOK — 用户自带 API key, 免使用项目默认额度
+    st.divider()
+    st.header("🔑 自带 API Key (BYOK)")
+    st.caption("填你自己的 key → 不消耗项目默认额度. 留空用默认. key 只存在本次 session.")
+    user_ds = st.text_input("DeepSeek API Key", type="password", key="user_ds_key",
+                              help="sk-... 开头. 在 platform.deepseek.com 申请")
+    user_zp = st.text_input("智谱 API Key", type="password", key="user_zp_key",
+                              help=".Zh... 格式. 在 open.bigmodel.cn 申请")
+    if user_ds or user_zp:
+        if user_ds:
+            os.environ["DEEPSEEK_API_KEY"] = user_ds
+        if user_zp:
+            os.environ["ZHIPUAI_KEY"] = user_zp
+            os.environ["ZHIPU_API_KEY"] = user_zp
+        st.success("✅ 已切换到你的 key")
+    else:
+        st.info("ℹ️ 用项目默认 key (额度有限)")
+
+    # v0.1.21: 累计成本 (session 内)
+    if "cumulative_cost" not in st.session_state:
+        st.session_state.cumulative_cost = 0.0
+        st.session_state.cumulative_tokens_in = 0
+        st.session_state.cumulative_tokens_out = 0
+        st.session_state.cumulative_queries = 0
+
     st.divider()
     st.header("📝 示例问题 (RAG)")
     examples = [
@@ -171,6 +196,21 @@ TOP_K_PER_QUERY={int(os.getenv('TOP_K_PER_QUERY', '8'))}""", language="bash")
     st.metric("文档数", n_docs)
     st.metric("chunk数 (chunks)", "385")
     st.metric("RAG 答对率 (11 题 benchmark)", "91%")
+
+    # v0.1.21: 本次 session 累计用量
+    st.divider()
+    st.header("💰 本次 session 用量")
+    cc = st.session_state.get("cumulative_cost", 0)
+    ci = st.session_state.get("cumulative_tokens_in", 0)
+    co = st.session_state.get("cumulative_tokens_out", 0)
+    cq = st.session_state.get("cumulative_queries", 0)
+    st.metric("总查询数", cq)
+    st.metric("总 token (in/out)", f"{ci:,} / {co:,}")
+    st.metric("总费用估算", f"¥{cc:.4f}")
+    if user_ds or user_zp:
+        st.caption("✅ 用你自己的 key (不计费)")
+    else:
+        st.caption("⚠️ 用项目默认 key (按用量计费)")
 
 # ---- 模式选择 ----
 # 修复: 之前 st.session_state.mode = st.radio(...) 是双绑定写法
@@ -301,12 +341,30 @@ if st.session_state.mode == "mm_rag":
                 )
                 full_answer = st.write_stream(chunk_gen)
                 elapsed = time.time() - t0
+
+                # v0.1.21: 估算 mm_rag 成本 (OCR + RAG + 综合 LLM)
+                # OCR 用 glm-4v (¥0.001/1K), RAG (DeepSeek + 智谱 embed), LLM (deepseek-chat)
+                from ultimate_rag import calc_cost
+                # 粗估: extracted_q 字符/2 + full_answer 字符/2 + RAG 上下文 + OCR image tokens ~1000
+                char_count = len(extracted_q) + len(full_answer or "") + 5000  # RAG context 估算
+                mm_usage = {
+                    "llm_input_tokens": char_count // 2,
+                    "llm_output_tokens": len(full_answer or "") // 2,
+                    "embedding_tokens": 500,  # RAG 检索 3 query * 智谱 embed
+                }
+                mm_cost = calc_cost(mm_usage)
+                # 加 OCR 单独计费 (glm-4v, ~¥0.001/1K tokens, 图片 ~1000 tokens)
+                ocr_cost = 0.001
+                total_cost = mm_cost + ocr_cost
+                st.session_state.cumulative_cost += total_cost
+                st.session_state.cumulative_queries += 1
             except Exception as e:
                 st.error(f"❌ 多模态错误: {type(e).__name__}: {e}")
                 st.stop()
 
             with col_y:
                 st.metric("⏱️ 用时", f"{elapsed:.1f}s")
+                st.metric("💰 本次", f"¥{total_cost:.4f}")
             sources_placeholder.metric("📚 文档", len(sources))
 
             if extracted_q:
@@ -464,17 +522,26 @@ else:
         # v0.1.20: streaming — LLM 输出逐 token 显示
         try:
             t0 = time.time()
-            chunk_gen, sources = qa_stream(question)
+            chunk_gen, sources, usage = qa_stream(question)
             # st.write_stream 自动边生成边刷新 UI
             full_answer = st.write_stream(chunk_gen)
             elapsed = time.time() - t0
+
+            # v0.1.21: 累加 session 成本
+            from ultimate_rag import calc_cost
+            cost = calc_cost(usage)
+            st.session_state.cumulative_cost += cost
+            st.session_state.cumulative_tokens_in += usage.get("llm_input_tokens", 0)
+            st.session_state.cumulative_tokens_out += usage.get("llm_output_tokens", 0)
+            st.session_state.cumulative_queries += 1
         except Exception as e:
             st.error(f"❌ RAG 错误: {type(e).__name__}: {e}")
             st.stop()
 
-        # 更新用时 + 来源数
+        # 更新用时 + 来源数 + 成本
         with col_b:
             st.metric("⏱️ 用时", f"{elapsed:.1f}s")
+            st.metric("💰 本次", f"¥{cost:.4f}")
         sources_placeholder.metric("📚 Sources", len(sources))
 
         if sources:
