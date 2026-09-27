@@ -11,18 +11,11 @@ compatibility_date = "2024-09-01"
 # preview_id = "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
 
 # 环境变量 (Stripe 密钥, 不要 commit 真 key)
-# [vars]
-# STRIPE_SECRET_KEY = "sk_test_..."
-# STRIPE_WEBHOOK_SECRET = "whsec_..."
-# PRICE_ID_PRO = "price_..."
-
-# 建议: 用 wrangler secret put 命令设, 不会写进 git
+# 用 wrangler secret put 设, 不会写进 git:
 #   wrangler secret put STRIPE_SECRET_KEY
 #   wrangler secret put STRIPE_WEBHOOK_SECRET
 #   wrangler secret put PRICE_ID_PRO
-
-[env.production]
-name = "rag-lab-billing"
-
-[env.staging]
-name = "rag-lab-billing-staging"
+#
+# 注意: 不要定义 [env.production] (production 是 wrangler 保留名, 会警告)
+# 本项目只有 top-level 一套配置, 直接 wrangler deploy 即可
+# 如需 staging: 自己加 [env.staging] 并用 wrangler deploy --env staging

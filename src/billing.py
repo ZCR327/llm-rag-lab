@@ -1,9 +1,19 @@
-"""billing.py — Cloudflare Worker 客户端, 查询/创建 Stripe 订阅"""
+"""billing.py — Cloudflare Worker 客户端, 查询/创建 Stripe 订阅
+
+配置: Streamlit Cloud → Settings → Secrets 加
+    BILLING_WORKER_URL = "https://<你的-worker>.workers.dev"
+没配的话 is_billing_enabled() 返回 False, app 会显示 '订阅服务未部署'.
+"""
 import os
-import json
 import httpx
 
-WORKER_URL = os.getenv("BILLING_WORKER_URL", "https://rag-lab-billing.xiaomi-minimax.workers.dev")
+# 没配 BILLING_WORKER_URL = 订阅功能未启用 (BYOK + 免费限速照常工作)
+WORKER_URL = os.getenv("BILLING_WORKER_URL", "").rstrip("/")
+
+
+def is_billing_enabled() -> bool:
+    """订阅服务是否已部署. 没配 BILLING_WORKER_URL 就返回 False."""
+    return bool(WORKER_URL)
 
 
 def check_subscription(email: str) -> dict:
@@ -11,6 +21,8 @@ def check_subscription(email: str) -> dict:
 
     status: 'none' (没订阅) / 'active' (订阅中) / 'canceled' (已取消) / 'expired' (过期)
     """
+    if not WORKER_URL:
+        return {"status": "disabled", "error": "BILLING_WORKER_URL 未配置"}
     try:
         r = httpx.get(f"{WORKER_URL}/sub", params={"email": email}, timeout=10.0)
         r.raise_for_status()
@@ -21,6 +33,8 @@ def check_subscription(email: str) -> dict:
 
 def create_checkout(email: str, success_url: str = None, cancel_url: str = None) -> str:
     """建 Stripe Checkout session, 返回跳转 URL. 用户打开 URL 完成支付."""
+    if not WORKER_URL:
+        return ""
     body = {"email": email}
     if success_url:
         body["success_url"] = success_url
@@ -37,6 +51,8 @@ def create_checkout(email: str, success_url: str = None, cancel_url: str = None)
 
 def create_portal(customer_id: str, return_url: str = None) -> str:
     """建 Stripe Customer Portal session, 返回跳转 URL. 用户管理订阅/取消."""
+    if not WORKER_URL:
+        return ""
     body = {"customer_id": customer_id}
     if return_url:
         body["return_url"] = return_url

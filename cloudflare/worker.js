@@ -76,18 +76,27 @@ async function stripe(path, body, env) {
 }
 
 // 验签 Stripe webhook (v1)
+// 返回 { ok, body } — body 必须先取出来, 因为 req.text() 会消费 request body
 async function verifyStripeSignature(req, env) {
   const sig = req.headers.get("stripe-signature");
-  if (!sig) return false;
+  if (!sig) return { ok: false, body: null };
+  // 关键: 先把 body 读出来缓存, 调用方复用, 不能再调 req.json()
   const body = await req.text();
+  if (!env.STRIPE_WEBHOOK_SECRET) return { ok: false, body };
+
   const items = sig.split(",").reduce((acc, kv) => {
     const [k, v] = kv.split("=");
-    acc[k] = v;
+    acc[k] = (acc[k] || []).concat(v);
     return acc;
   }, {});
-  const ts = items["t"];
-  const v1 = items["v1"];
-  if (!ts || !v1) return false;
+  const ts = items["t"]?.[0];
+  // Stripe 会给多个 v1 (轮换密钥期间), 任何一个匹配即可
+  const v1s = items["v1"] || [];
+  if (!ts || v1s.length === 0) return { ok: false, body };
+
+  // 重放攻击防护: 时间戳超过 5 分钟直接拒
+  const age = Math.abs(Math.floor(Date.now() / 1000) - parseInt(ts, 10));
+  if (age > 300) return { ok: false, body };
 
   const enc = new TextEncoder();
   const key = await crypto.subtle.importKey(
@@ -97,22 +106,34 @@ async function verifyStripeSignature(req, env) {
     false,
     ["sign"]
   );
-  const signedPayload = `${ts}.${body}`;
-  const sigBytes = await crypto.subtle.sign("HMAC", key, enc.encode(signedPayload));
-  const expected = Array.from(new Uint8Array(sigBytes))
-    .map(b => b.toString(16).padStart(2, "0"))
-    .join("");
-  return expected === v1;
+  const sigBytes = new Uint8Array(
+    await crypto.subtle.sign("HMAC", key, enc.encode(`${ts}.${body}`))
+  );
+  const expected = Array.from(sigBytes).map(b => b.toString(16).padStart(2, "0")).join("");
+
+  // timing-safe 比较 (防时序侧信道)
+  const isMatch = (a, b) => {
+    if (a.length !== b.length) return false;
+    let diff = 0;
+    for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+    return diff === 0;
+  };
+  return { ok: v1s.some(v => isMatch(expected, v)), body };
 }
 
 // ============ Handlers ============
 
 async function handleWebhook(req, env, cors) {
-  // 验签
-  const ok = await verifyStripeSignature(req, env);
+  // 验签 (顺带把 body 拿回来)
+  const { ok, body } = await verifyStripeSignature(req, env);
   if (!ok) return json({ error: "invalid signature" }, 400, cors);
 
-  const event = await req.json();
+  let event;
+  try {
+    event = JSON.parse(body);
+  } catch {
+    return json({ error: "bad json" }, 400, cors);
+  }
   const eventType = event.type;
 
   // 关注的几个事件
@@ -152,6 +173,8 @@ async function handleGetSubscription(req, env, cors) {
   const url = new URL(req.url);
   const email = url.searchParams.get("email");
   if (!email) return json({ error: "missing email" }, 400, cors);
+  // KV 没绑 → 明确报错, 而不是 500
+  if (!env.SUB) return json({ error: "KV namespace SUB not bound" }, 503, cors);
 
   const key = `sub:${email.toLowerCase()}`;
   const cached = await env.SUB.get(key);
