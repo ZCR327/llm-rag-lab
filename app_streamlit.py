@@ -271,6 +271,17 @@ TOP_K_PER_QUERY={int(os.getenv('TOP_K_PER_QUERY', '8'))}""", language="bash")
         st.metric("今日查询 (免费)", f"{qs['count']} / {qs['limit']}")
         st.progress(min(qs['count'] / qs['limit'], 1.0))
 
+    # v0.1.25: 配额锁定方式提示 (IP+指纹 vs 内存)
+    try:
+        import quota_kv
+        if qs['storage'] == "kv":
+            ip = quota_kv.get_user_ip()
+            st.caption(f"🔒 已按 IP+浏览器指纹锁定 ({ip}) — 刷新不会重置")
+        else:
+            st.caption("⚠️ 配额存在内存, 刷新会重置 (配置 BILLING_WORKER_URL 可持久化)")
+    except Exception:
+        pass
+
 # ---- 模式选择 ----
 # 修复: 之前 st.session_state.mode = st.radio(...) 是双绑定写法
 # Streamlit widget 读 st.session_state.mode_radio, 跟 st.session_state.mode 不对齐

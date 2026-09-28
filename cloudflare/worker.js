@@ -17,6 +17,9 @@
  */
 
 import { handleAlipaySign, handleAlipayQuery, handleAlipayNotify } from "./alipay.js";
+import {
+  handleQuotaGet, handleQuotaIncr, handleQuotaReset, handleQuotaStats,
+} from "./quota.js";
 
 export default {
   async fetch(req, env, ctx) {
@@ -32,6 +35,20 @@ export default {
     }
 
     try {
+      // ---- 配额 (IP+指纹 锁定) ----
+      if (url.pathname === "/quota" && req.method === "GET") {
+        return await handleQuotaGet(req, env, url);
+      }
+      if (url.pathname === "/quota/incr" && req.method === "POST") {
+        return await handleQuotaIncr(req, env, url);
+      }
+      if (url.pathname === "/quota/reset" && req.method === "POST") {
+        return await handleQuotaReset(req, env, url);
+      }
+      if (url.pathname === "/quota/stats" && req.method === "GET") {
+        return await handleQuotaStats(req, env, url);
+      }
+
       if (url.pathname === "/webhook/stripe" && req.method === "POST") {
         return await handleWebhook(req, env, corsHeaders);
       }

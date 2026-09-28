@@ -46,6 +46,43 @@ def init_quota_state():
         st.session_state.quota_count = 0
 
 
+def _get_count() -> int:
+    """取今天已用次数. 优先 Worker KV (跨刷新/跨重启), 降级 session_state."""
+    import streamlit as st
+
+    try:
+        import quota_kv
+        if quota_kv.is_enabled():
+            cid = quota_kv.get_client_id()
+            if cid:
+                n = quota_kv.get_count(cid)
+                if n >= 0:
+                    return n
+    except Exception:
+        pass
+    return st.session_state.get("quota_count", 0)
+
+
+def _add_count() -> int:
+    """+1 并返回新值. 优先 Worker KV, 降级 session_state."""
+    import streamlit as st
+
+    try:
+        import quota_kv
+        if quota_kv.is_enabled():
+            cid = quota_kv.get_client_id()
+            if cid:
+                n = quota_kv.increment(cid)
+                if n >= 0:
+                    # 同步到 session_state (给 UI 显示用, 避免重复请求)
+                    st.session_state.quota_count = n
+                    return n
+    except Exception:
+        pass
+    st.session_state.quota_count = st.session_state.get("quota_count", 0) + 1
+    return st.session_state.quota_count
+
+
 def check_can_query(has_byok: bool, is_pro: bool) -> tuple[bool, str]:
     """检查是否能查询. 返回 (allow, reason).
 
@@ -61,7 +98,8 @@ def check_can_query(has_byok: bool, is_pro: bool) -> tuple[bool, str]:
         return True, "BYOK"
 
     limit = get_daily_limit(is_pro)
-    if st.session_state.quota_count >= limit:
+    count = _get_count()
+    if count >= limit:
         if is_pro:
             return False, (
                 f"今天 Pro 次数 ({limit}) 已用完, 明天 0 点重置. "
@@ -77,8 +115,7 @@ def check_can_query(has_byok: bool, is_pro: bool) -> tuple[bool, str]:
 def increment_quota():
     """每次成功查询后调用 +1. 仅在用平台默认 key 时调 (BYOK 不计)."""
     init_quota_state()
-    import streamlit as st
-    st.session_state.quota_count += 1
+    _add_count()
 
 
 def get_quota_status(is_pro: bool = False) -> dict:
@@ -86,7 +123,15 @@ def get_quota_status(is_pro: bool = False) -> dict:
     init_quota_state()
     import streamlit as st
     limit = get_daily_limit(is_pro)
-    count = st.session_state.quota_count
+    count = _get_count()
+    # 标识当前用的是哪种存储 (UI 上提示用户)
+    storage = "session"
+    try:
+        import quota_kv
+        if quota_kv.is_enabled() and quota_kv.get_client_id():
+            storage = "kv"
+    except Exception:
+        pass
     return {
         "date": str(st.session_state.quota_date),
         "count": count,
@@ -94,4 +139,5 @@ def get_quota_status(is_pro: bool = False) -> dict:
         "remaining": max(0, limit - count),
         "is_pro": is_pro,
         "tier": "pro" if is_pro else "free",
+        "storage": storage,
     }
