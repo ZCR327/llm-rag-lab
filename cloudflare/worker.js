@@ -99,17 +99,23 @@ async function verifyStripeSignature(req, env) {
   if (age > 300) return { ok: false, body };
 
   const enc = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    "raw",
-    enc.encode(env.STRIPE_WEBHOOK_SECRET),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
-  const sigBytes = new Uint8Array(
-    await crypto.subtle.sign("HMAC", key, enc.encode(`${ts}.${body}`))
-  );
-  const expected = Array.from(sigBytes).map(b => b.toString(16).padStart(2, "0")).join("");
+  let expected;
+  try {
+    const key = await crypto.subtle.importKey(
+      "raw",
+      enc.encode(env.STRIPE_WEBHOOK_SECRET),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"]
+    );
+    const sigBytes = new Uint8Array(
+      await crypto.subtle.sign("HMAC", key, enc.encode(`${ts}.${body}`))
+    );
+    expected = Array.from(sigBytes).map(b => b.toString(16).padStart(2, "0")).join("");
+  } catch {
+    // secret 格式异常 / 长度不对 等 — 返回 400 而不是 500
+    return { ok: false, body };
+  }
 
   // timing-safe 比较 (防时序侧信道)
   const isMatch = (a, b) => {
