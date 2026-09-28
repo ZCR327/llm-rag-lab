@@ -217,6 +217,11 @@ async function handleCreateCheckout(req, env, cors) {
 
   if (!email) return json({ error: "missing email" }, 400, cors);
 
+  // Pro 定价在 Stripe Dashboard 的 Price 对象上配置 (不是这里):
+  //   Product: "RAG Lab Pro"  |  Recurring: 每月  |  Price: ¥5.00 CNY
+  //   → unit_amount = 500 (CNY 最小单位是"分", 所以 500 = ¥5.00)
+  //   → 把生成的 price_xxx ID 填到 wrangler secret put PRICE_ID_PRO
+  // Stripe 会按 Price 自带的币种结算, 这里不用再传 currency
   const session = await stripe("/checkout/sessions", {
     "mode": "subscription",
     "line_items[0][price]": env.PRICE_ID_PRO,

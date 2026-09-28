@@ -70,8 +70,9 @@ wrangler deploy
 - Dashboard → Products → **Add product**
 - Name: "RAG Lab Pro"
 - Pricing model: **Recurring** (每月)
-- Price: $5 USD
-- Currency: USD
+- Price: **¥5.00 CNY** (currency 选 CNY / 人民币)
+  - unit_amount = 500 (CNY 最小单位是"分")
+  - ⚠️ Stripe 账户必须支持 CNY 结算, 否则只能选 USD (改 `¥5` → `$5`)
 - Save → 复制 `price_...` ID → 填到 `wrangler secret put PRICE_ID_PRO`
 
 ### 3. 配置 Webhook

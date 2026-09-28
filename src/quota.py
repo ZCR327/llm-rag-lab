@@ -1,21 +1,34 @@
-"""quota.py — 免费用户每日限额管理 (v0.1.23)
+"""quota.py — 每日限额管理 (v0.1.24)
 
-模型:
-- BYOK 用户: 不限 (自己掏钱)
-- Pro 订阅用户: 不限 ($5/月)
-- Free 用户 (默认 key): 限 10 次/天
+模型 (v0.1.24 改: Pro 从"不限"改为"每天 100 次"):
+- BYOK 用户: 不限 (自己掏钱, 用自己的 key)
+- Pro 订阅用户: ¥5/月, 每天 100 次 (每天重置)
+- Free 用户 (默认 key): 每天 10 次 (每天重置)
 
-存储: 用 session_state 计数, 每天 UTC 0 点重置
+存储: 用 session_state 计数, 每天 UTC+8 0 点重置
 - 优点: 简单, 不需 DB
-- 缺点: 同一用户清 session 就能绕 (low stakes MVP)
+- 缺点: 同一用户清 session 就能绕 (low stakes MVP, 后续可换 Worker KV)
 """
 
 
-FREE_DAILY_LIMIT = 10  # 免费用户每天 10 次
+FREE_DAILY_LIMIT = 10     # 免费用户: 每天 10 次
+PRO_DAILY_LIMIT = 100     # Pro 用户: 每天 100 次 (v0.1.24 新增)
+
+# 定价 (展示用)
+PRICING_LABEL = {
+    "free": "免费 (每天 10 次)",
+    "pro": "Pro ¥5/月 (每天 100 次)",
+    "byok": "自带 Key (不限次)",
+}
+
+
+def get_daily_limit(is_pro: bool) -> int:
+    """按用户类型返回每日限额."""
+    return PRO_DAILY_LIMIT if is_pro else FREE_DAILY_LIMIT
 
 
 def init_quota_state():
-    """初始化 session_state 里的 quota 字段. 在 app 启动时调一次."""
+    """初始化 session_state 里的 quota 字段. 每次检查前都调 (幂等)."""
     import streamlit as st
     from datetime import datetime, timezone, timedelta
 
@@ -35,36 +48,50 @@ def init_quota_state():
 
 def check_can_query(has_byok: bool, is_pro: bool) -> tuple[bool, str]:
     """检查是否能查询. 返回 (allow, reason).
-    allow=True: 可以查
-    allow=False: 不行, reason 是给用户看的错误消息
+
+    优先级: BYOK > Pro > Free
+    - BYOK: 永远允许 (用用户自己的 key, 不消耗平台额度)
+    - Pro: 每天 100 次
+    - Free: 每天 10 次
     """
     init_quota_state()
     import streamlit as st
 
     if has_byok:
         return True, "BYOK"
-    if is_pro:
-        return True, "Pro"
-    # Free tier
-    if st.session_state.quota_count >= FREE_DAILY_LIMIT:
-        return False, f"今天免费次数 ({FREE_DAILY_LIMIT}) 已用完. 填自己的 API key 或订阅 Pro 继续."
-    return True, "free"
+
+    limit = get_daily_limit(is_pro)
+    if st.session_state.quota_count >= limit:
+        if is_pro:
+            return False, (
+                f"今天 Pro 次数 ({limit}) 已用完, 明天 0 点重置. "
+                f"或填自己的 API Key (不限次)."
+            )
+        return False, (
+            f"今天免费次数 ({limit}) 已用完. "
+            f"填自己的 API Key (不限次) 或订阅 Pro (¥5/月, 每天 {PRO_DAILY_LIMIT} 次)."
+        )
+    return True, "pro" if is_pro else "free"
 
 
 def increment_quota():
-    """每次成功查询后调用 +1. 仅在用默认 key 时调."""
+    """每次成功查询后调用 +1. 仅在用平台默认 key 时调 (BYOK 不计)."""
     init_quota_state()
     import streamlit as st
     st.session_state.quota_count += 1
 
 
-def get_quota_status() -> dict:
+def get_quota_status(is_pro: bool = False) -> dict:
     """返回 quota 当前状态 (给 UI 显示)."""
     init_quota_state()
     import streamlit as st
+    limit = get_daily_limit(is_pro)
+    count = st.session_state.quota_count
     return {
         "date": str(st.session_state.quota_date),
-        "count": st.session_state.quota_count,
-        "limit": FREE_DAILY_LIMIT,
-        "remaining": max(0, FREE_DAILY_LIMIT - st.session_state.quota_count),
+        "count": count,
+        "limit": limit,
+        "remaining": max(0, limit - count),
+        "is_pro": is_pro,
+        "tier": "pro" if is_pro else "free",
     }

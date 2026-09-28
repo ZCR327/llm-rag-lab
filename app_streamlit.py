@@ -245,28 +245,31 @@ TOP_K_PER_QUERY={int(os.getenv('TOP_K_PER_QUERY', '8'))}""", language="bash")
                     if portal_url and not portal_url.startswith("(error"):
                         st.markdown(f"[⚙️ 管理订阅]({portal_url})")
             else:
-                st.info(f"ℹ️ 状态: {status} (免费用户, 每次查询按用量计费)")
+                st.info(f"ℹ️ 状态: {status} (免费: 每天 10 次)")
                 checkout_url = create_checkout(sub_email)
                 if checkout_url and not checkout_url.startswith("(error"):
                     st.markdown(f"[💎 升级 Pro]({checkout_url})")
-                    st.caption("$5/月, 无限查询")
+                    st.caption("¥5/月 · 每天 100 次")
                 else:
                     st.error(f"订阅服务连接失败: {checkout_url}")
         else:
             st.caption("填邮箱开通 Pro 订阅, 或下方填自己的 API Key")
 
-    # v0.1.23: 免费用户每日 quota 显示
-    from quota import get_quota_status, FREE_DAILY_LIMIT
-    qs = get_quota_status()
+    # v0.1.24: 每日 quota 显示 (Free 10 / Pro 100 / BYOK 不限)
+    from quota import get_quota_status, PRO_DAILY_LIMIT
     pro_active = st.session_state.get("pro_status", "none") == "active"
     has_byok_now = bool(user_ds and user_zp)
-    if pro_active:
-        st.metric("💎 今日查询", f"{qs['count']} (Pro 无限)")
-    elif has_byok_now:
-        st.metric("🔑 今日查询", f"{qs['count']} (BYOK 无限)")
+    qs = get_quota_status(is_pro=pro_active)
+    if has_byok_now:
+        st.metric("🔑 今日查询", f"{qs['count']} (不限)")
+        st.caption("BYOK: 用你自己的 key, 不限次不耗平台额度")
+    elif pro_active:
+        st.metric("💎 今日查询 (Pro)", f"{qs['count']} / {PRO_DAILY_LIMIT}")
+        st.progress(min(qs['count'] / PRO_DAILY_LIMIT, 1.0))
+        st.caption("¥5/月 · 每天 100 次 · 0 点重置")
     else:
-        st.metric("今日查询 (免费)", f"{qs['count']} / {FREE_DAILY_LIMIT}")
-        st.progress(min(qs['count'] / FREE_DAILY_LIMIT, 1.0))
+        st.metric("今日查询 (免费)", f"{qs['count']} / {qs['limit']}")
+        st.progress(min(qs['count'] / qs['limit'], 1.0))
 
 # ---- 模式选择 ----
 # 修复: 之前 st.session_state.mode = st.radio(...) 是双绑定写法
