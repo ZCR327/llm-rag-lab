@@ -200,13 +200,16 @@ TOP_K_PER_QUERY={int(os.getenv('TOP_K_PER_QUERY', '8'))}""", language="bash")
     # v0.1.21: 本次 session 累计用量
     st.divider()
     st.header("💰 本次 session 用量")
-    cc = st.session_state.get("cumulative_cost", 0)
-    ci = st.session_state.get("cumulative_tokens_in", 0)
-    co = st.session_state.get("cumulative_tokens_out", 0)
-    cq = st.session_state.get("cumulative_queries", 0)
-    st.metric("总查询数", cq)
-    st.metric("总 token (in/out)", f"{ci:,} / {co:,}")
-    st.metric("总费用估算", f"¥{cc:.4f}")
+    # 存到 session_state 的 placeholder 引用, 主区查询完成后回填 (Streamlit sidebar 先渲染, 读到的是旧值)
+    sb_q_ph = st.empty()
+    sb_tok_ph = st.empty()
+    sb_cost_ph = st.empty()
+    sb_q_ph.metric("总查询数", st.session_state.get("cumulative_queries", 0))
+    sb_tok_ph.metric("总 token (in/out)",
+                     f"{st.session_state.get('cumulative_tokens_in', 0):,} / "
+                     f"{st.session_state.get('cumulative_tokens_out', 0):,}")
+    sb_cost_ph.metric("总费用估算", f"¥{st.session_state.get('cumulative_cost', 0):.4f}")
+    st.session_state["_sb_placeholders"] = (sb_q_ph, sb_tok_ph, sb_cost_ph)
     if user_ds or user_zp:
         st.caption("✅ 用你自己的 key (不计费)")
     else:
@@ -392,8 +395,9 @@ elif st.session_state.mode == "mm_rag":
             with col_x:
                 st.markdown("### 🧠 综合解答")
             with col_y:
-                st.metric("⏱️ 用时", "streaming...")
-                sources_placeholder = st.empty()
+                # 单个 placeholder, 后续覆盖 (避免 st.metric 叠加渲染)
+                mm_time_ph = st.empty()
+                mm_time_ph.metric("⏱️ 用时", "streaming...")
 
             # v0.1.20: streaming — OCR + RAG 同步阻塞, LLM 综合这一步 stream
             try:
@@ -426,9 +430,11 @@ elif st.session_state.mode == "mm_rag":
                 st.stop()
 
             with col_y:
-                st.metric("⏱️ 用时", f"{elapsed:.1f}s")
-                st.metric("💰 本次", f"¥{total_cost:.4f}")
-            sources_placeholder.metric("📚 文档", len(sources))
+                mm_time_ph.metric("⏱️ 用时", f"{elapsed:.1f}s")
+                mm_cost_ph = st.empty()
+                mm_cost_ph.metric("💰 本次", f"¥{total_cost:.4f}")
+                mm_src_ph = st.empty()
+                mm_src_ph.metric("📚 文档", len(sources))
 
             if extracted_q:
                 with st.expander("📋 OCR 提取的题面", expanded=False):
@@ -591,8 +597,9 @@ else:
         with col_a:
             st.markdown("### 💡 答案")
         with col_b:
-            st.metric("⏱️ 用时", "streaming...")
-            sources_placeholder = st.empty()
+            # 单个 placeholder, 后续用 .metric() 填内容 (避免 st.metric 叠加渲染)
+            time_placeholder = st.empty()
+            time_placeholder.metric("⏱️ 用时", "streaming...")
 
         # v0.1.20: streaming — LLM 输出逐 token 显示
         try:
@@ -612,15 +619,26 @@ else:
             # v0.1.23: 免费用户 +1 计数 (BYOK / Pro 不计)
             if not has_byok and not is_pro:
                 increment_quota()
+
+            # 回填 sidebar 用量 (sidebar 先渲染, 必须用 placeholder 更新)
+            _phs = st.session_state.get("_sb_placeholders")
+            if _phs:
+                _phs[0].metric("总查询数", st.session_state.cumulative_queries)
+                _phs[1].metric("总 token (in/out)",
+                               f"{st.session_state.cumulative_tokens_in:,} / "
+                               f"{st.session_state.cumulative_tokens_out:,}")
+                _phs[2].metric("总费用估算", f"¥{st.session_state.cumulative_cost:.4f}")
         except Exception as e:
             st.error(f"❌ RAG 错误: {type(e).__name__}: {e}")
             st.stop()
 
-        # 更新用时 + 来源数 + 成本
+        # 更新用时 + 来源数 + 成本 (用同一个 placeholder 覆盖, 不再新开 col_b)
         with col_b:
-            st.metric("⏱️ 用时", f"{elapsed:.1f}s")
-            st.metric("💰 本次", f"¥{cost:.4f}")
-        sources_placeholder.metric("📚 Sources", len(sources))
+            time_placeholder.metric("⏱️ 用时", f"{elapsed:.1f}s")
+            cost_placeholder = st.empty()
+            cost_placeholder.metric("💰 本次", f"¥{cost:.4f}")
+            rag_src_ph = st.empty()
+            rag_src_ph.metric("📚 Sources", len(sources))
 
         if sources:
             st.divider()
