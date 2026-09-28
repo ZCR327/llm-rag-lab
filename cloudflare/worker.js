@@ -20,6 +20,9 @@ import { handleAlipaySign, handleAlipayQuery, handleAlipayNotify } from "./alipa
 import {
   handleQuotaGet, handleQuotaIncr, handleQuotaReset, handleQuotaStats,
 } from "./quota.js";
+import {
+  handleSendCode, handleVerify, handleCheck, handleBind,
+} from "./email.js";
 
 export default {
   async fetch(req, env, ctx) {
@@ -35,6 +38,20 @@ export default {
     }
 
     try {
+      // ---- 邮箱验证 ----
+      if (url.pathname === "/email/send-code" && req.method === "POST") {
+        return await handleSendCode(req, env);
+      }
+      if (url.pathname === "/email/verify" && req.method === "POST") {
+        return await handleVerify(req, env);
+      }
+      if (url.pathname === "/email/check" && req.method === "GET") {
+        return await handleCheck(req, env, url);
+      }
+      if (url.pathname === "/email/bind" && req.method === "POST") {
+        return await handleBind(req, env);
+      }
+
       // ---- 配额 (IP+指纹 锁定) ----
       if (url.pathname === "/quota" && req.method === "GET") {
         return await handleQuotaGet(req, env, url);

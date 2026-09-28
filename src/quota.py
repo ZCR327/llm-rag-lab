@@ -46,6 +46,32 @@ def init_quota_state():
         st.session_state.quota_count = 0
 
 
+def get_quota_key() -> str:
+    """算当前用户的配额 key.
+
+    优先级:
+    1. 已验证邮箱  → "u:<email>"  (跟账号走, 换 IP / 换浏览器都不掉)
+    2. IP + 指纹   → "c:<client_id>" (未验证时的临时身份)
+    3. 空字符串    → 降级 session_state
+
+    已验证邮箱存在 st.session_state["verified_email"] 里 (由 email_verify 设置).
+    """
+    import streamlit as st
+
+    verified_email = st.session_state.get("verified_email")
+    if verified_email:
+        return f"u:{verified_email.strip().lower()}"
+
+    try:
+        import quota_kv
+        cid = quota_kv.get_client_id()
+        if cid:
+            return f"c:{cid}"
+    except Exception:
+        pass
+    return ""
+
+
 def _get_count() -> int:
     """取今天已用次数. 优先 Worker KV (跨刷新/跨重启), 降级 session_state."""
     import streamlit as st
@@ -53,9 +79,9 @@ def _get_count() -> int:
     try:
         import quota_kv
         if quota_kv.is_enabled():
-            cid = quota_kv.get_client_id()
-            if cid:
-                n = quota_kv.get_count(cid)
+            key = get_quota_key()
+            if key:
+                n = quota_kv.get_count(key)
                 if n >= 0:
                     return n
     except Exception:
@@ -70,9 +96,9 @@ def _add_count() -> int:
     try:
         import quota_kv
         if quota_kv.is_enabled():
-            cid = quota_kv.get_client_id()
-            if cid:
-                n = quota_kv.increment(cid)
+            key = get_quota_key()
+            if key:
+                n = quota_kv.increment(key)
                 if n >= 0:
                     # 同步到 session_state (给 UI 显示用, 避免重复请求)
                     st.session_state.quota_count = n
@@ -128,8 +154,10 @@ def get_quota_status(is_pro: bool = False) -> dict:
     storage = "session"
     try:
         import quota_kv
-        if quota_kv.is_enabled() and quota_kv.get_client_id():
-            storage = "kv"
+        if quota_kv.is_enabled():
+            key = get_quota_key()
+            if key:
+                storage = "account" if key.startswith("u:") else "kv"
     except Exception:
         pass
     return {
@@ -140,4 +168,5 @@ def get_quota_status(is_pro: bool = False) -> dict:
         "is_pro": is_pro,
         "tier": "pro" if is_pro else "free",
         "storage": storage,
+        "key_type": "email" if storage == "account" else ("ip" if storage == "kv" else "memory"),
     }

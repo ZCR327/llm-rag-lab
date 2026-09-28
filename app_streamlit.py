@@ -271,16 +271,85 @@ TOP_K_PER_QUERY={int(os.getenv('TOP_K_PER_QUERY', '8'))}""", language="bash")
         st.metric("今日查询 (免费)", f"{qs['count']} / {qs['limit']}")
         st.progress(min(qs['count'] / qs['limit'], 1.0))
 
-    # v0.1.25: 配额锁定方式提示 (IP+指纹 vs 内存)
+    # v0.1.25: 配额锁定方式提示 (邮箱 / IP+指纹 / 内存)
     try:
         import quota_kv
-        if qs['storage'] == "kv":
+        if qs['storage'] == "account":
+            st.caption(f"🔒 配额已绑定邮箱 `{st.session_state.get('verified_email', '')}` — 换设备不会丢")
+        elif qs['storage'] == "kv":
             ip = quota_kv.get_user_ip()
             st.caption(f"🔒 已按 IP+浏览器指纹锁定 ({ip}) — 刷新不会重置")
         else:
             st.caption("⚠️ 配额存在内存, 刷新会重置 (配置 BILLING_WORKER_URL 可持久化)")
     except Exception:
         pass
+
+# ==================== v0.1.26 邮箱验证门禁 (强制) ====================
+# 未验证邮箱 → 整个 app 不可用. BYOK 用户也需验证 (防滥用 API 额度)
+# 已验证 → 配额跟账号走 (换 IP / 换浏览器都不掉)
+import email_verify as _ev
+
+if "verified_email" not in st.session_state:
+    st.session_state.verified_email = None
+
+_verify_ok = bool(st.session_state.verified_email)
+
+# Worker 没部署时不强制 (降级: 只用 IP+指纹配额)
+_verify_enforced = _ev.is_enabled() and os.getenv("REQUIRE_EMAIL_VERIFY", "true").lower() == "true"
+
+if _verify_enforced and not _verify_ok:
+    st.markdown("""
+    <div style="text-align:center;padding:20px 0">
+        <div style="font-size:56px">📧</div>
+        <h2>请先验证邮箱</h2>
+        <p style="color:#888">本应用需要验证邮箱后才能使用<br>
+        验证后你的每日配额将<b>绑定到账号</b>，换设备 / 换网络都不会丢失</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    v_col1, v_col2 = st.columns([3, 1])
+    with v_col1:
+        v_email = st.text_input(
+            "邮箱地址", key="verify_email", placeholder="your@email.com",
+            label_visibility="collapsed"
+        )
+    with v_col2:
+        send_clicked = st.button("📮 发送验证码", use_container_width=True,
+                                disabled=not _ev.is_valid_email(v_email))
+
+    if send_clicked:
+        ok, msg = _ev.send_code(v_email)
+        if ok:
+            st.success(msg)
+            st.session_state["_code_sent"] = True
+        else:
+            st.error(msg)
+
+    if st.session_state.get("_code_sent"):
+        v_code = st.text_input("6 位验证码", key="verify_code", max_chars=6,
+                               placeholder="123456", label_visibility="collapsed")
+        verify_clicked = st.button("✅ 验证并进入", type="primary", use_container_width=True)
+        if verify_clicked:
+            ok, msg = _ev.verify(v_email, v_code)
+            if ok:
+                st.session_state.verified_email = v_email.strip().lower()
+                # 绑定 client_id (让配额跟账号走)
+                try:
+                    import quota_kv
+                    cid = quota_kv.get_client_id()
+                    if cid:
+                        _ev.bind(v_email, cid)
+                except Exception:
+                    pass
+                st.rerun()
+            else:
+                st.error(msg)
+
+    st.divider()
+    st.caption("🔒 我们只用你的邮箱做配额统计，不会发送任何推广邮件")
+    st.stop()   # ← 未验证, 阻断后续所有功能
+
+# ==================== 邮箱验证门禁结束 ====================
 
 # ---- 模式选择 ----
 # 修复: 之前 st.session_state.mode = st.radio(...) 是双绑定写法
