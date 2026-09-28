@@ -355,7 +355,7 @@ if st.session_state.mode == "ocr":
             )
 
 # ======================== 多模态 OCR + RAG 模式 ========================
-if st.session_state.mode == "mm_rag":
+elif st.session_state.mode == "mm_rag":
     st.subheader("🖼️ 多模态 OCR + 文档参考")
     st.caption("上传题图 → OCR 提题面 → RAG 找项目文档参考 → LLM 综合解答")
 
@@ -452,7 +452,7 @@ if st.session_state.mode == "mm_rag":
 
 
 # ======================== Web Agent 模式 ========================
-if st.session_state.mode == "agent":
+elif st.session_state.mode == "agent":
     st.subheader("🤖 Web Agent (ReAct)")
     st.caption("LLM 自动选工具: RAG / OCR / Web Search / URL Fetch")
 
