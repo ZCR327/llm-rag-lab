@@ -255,23 +255,54 @@ TOP_K_PER_QUERY={int(os.getenv('TOP_K_PER_QUERY', '8'))}""", language="bash")
         else:
             st.caption("填邮箱开通 Pro 订阅, 或下方填自己的 API Key")
 
-    # v0.1.24: 每日 quota 显示 (Free 10 / Pro 100 / BYOK 不限)
-    from quota import get_quota_status, PRO_DAILY_LIMIT
+    # v0.1.27: 四档 quota 显示 + 邮箱验证升级入口
+    from quota import get_quota_status, VERIFIED_DAILY_LIMIT, PRO_DAILY_LIMIT
     pro_active = st.session_state.get("pro_status", "none") == "active"
     has_byok_now = bool(user_ds and user_zp)
-    qs = get_quota_status(is_pro=pro_active)
-    if has_byok_now:
-        st.metric("🔑 今日查询", f"{qs['count']} (不限)")
-        st.caption("BYOK: 用你自己的 key, 不限次不耗平台额度")
-    elif pro_active:
-        st.metric("💎 今日查询 (Pro)", f"{qs['count']} / {PRO_DAILY_LIMIT}")
-        st.progress(min(qs['count'] / PRO_DAILY_LIMIT, 1.0))
-        st.caption("¥5/月 · 每天 100 次 · 0 点重置")
-    else:
-        st.metric("今日查询 (免费)", f"{qs['count']} / {qs['limit']}")
-        st.progress(min(qs['count'] / qs['limit'], 1.0))
+    verified_now = bool(st.session_state.get("verified_email"))
+    qs = get_quota_status(has_byok=has_byok_now, is_pro=pro_active, is_verified=verified_now)
 
-    # v0.1.25: 配额锁定方式提示 (邮箱 / IP+指纹 / 内存)
+    st.metric(f"今日查询 ({qs['tier_label']})", f"{qs['count']} / {qs['limit']}" if qs['tier'] != "byok" else f"{qs['count']} (不限)")
+    if qs['tier'] != "byok":
+        st.progress(min(qs['count'] / qs['limit'], 1.0))
+    st.caption(qs['tier_desc'])
+
+    # 邮箱验证升级入口 (游客 / 已验证 才有必要显示)
+    if _ev.is_enabled() and not verified_now and not has_byok_now:
+        st.divider()
+        st.header("📮 验证邮箱 (提额到 30 次/天)")
+        v_email = st.text_input("邮箱地址", key="verify_email",
+                                placeholder="your@email.com")
+        if st.button("📮 发送验证码", use_container_width=True,
+                     disabled=not _ev.is_valid_email(v_email)):
+            ok, msg = _ev.send_code(v_email)
+            if ok:
+                st.success(msg)
+                st.session_state["_code_sent"] = True
+            else:
+                st.error(msg)
+
+        if st.session_state.get("_code_sent"):
+            v_code = st.text_input("6 位验证码", key="verify_code", max_chars=6,
+                                   placeholder="123456")
+            if st.button("✅ 验证", type="primary", use_container_width=True):
+                ok, msg = _ev.verify(v_email, v_code)
+                if ok:
+                    st.session_state.verified_email = v_email.strip().lower()
+                    try:
+                        import quota_kv
+                        cid = quota_kv.get_client_id()
+                        if cid:
+                            _ev.bind(v_email, cid)
+                    except Exception:
+                        pass
+                    st.rerun()
+                else:
+                    st.error(msg)
+
+        st.caption("🔒 只用于配额统计, 不发推广邮件")
+
+    # 配额锁定方式提示 (邮箱 / IP+指纹 / 内存)
     try:
         import quota_kv
         if qs['storage'] == "account":
@@ -284,72 +315,13 @@ TOP_K_PER_QUERY={int(os.getenv('TOP_K_PER_QUERY', '8'))}""", language="bash")
     except Exception:
         pass
 
-# ==================== v0.1.26 邮箱验证门禁 (强制) ====================
-# 未验证邮箱 → 整个 app 不可用. BYOK 用户也需验证 (防滥用 API 额度)
-# 已验证 → 配额跟账号走 (换 IP / 换浏览器都不掉)
+# v0.1.27: 邮箱验证改为「可选升级」而非强制门禁.
+# 游客直接用 (10 次/天), 验证邮箱提到 30 次/天, Pro 100 次/天, BYOK 不限.
+# UI 在侧边栏, 见下方 '📮 验证邮箱' 区块.
 import email_verify as _ev
 
 if "verified_email" not in st.session_state:
     st.session_state.verified_email = None
-
-_verify_ok = bool(st.session_state.verified_email)
-
-# Worker 没部署时不强制 (降级: 只用 IP+指纹配额)
-_verify_enforced = _ev.is_enabled() and os.getenv("REQUIRE_EMAIL_VERIFY", "true").lower() == "true"
-
-if _verify_enforced and not _verify_ok:
-    st.markdown("""
-    <div style="text-align:center;padding:20px 0">
-        <div style="font-size:56px">📧</div>
-        <h2>请先验证邮箱</h2>
-        <p style="color:#888">本应用需要验证邮箱后才能使用<br>
-        验证后你的每日配额将<b>绑定到账号</b>，换设备 / 换网络都不会丢失</p>
-    </div>
-    """, unsafe_allow_html=True)
-
-    v_col1, v_col2 = st.columns([3, 1])
-    with v_col1:
-        v_email = st.text_input(
-            "邮箱地址", key="verify_email", placeholder="your@email.com",
-            label_visibility="collapsed"
-        )
-    with v_col2:
-        send_clicked = st.button("📮 发送验证码", use_container_width=True,
-                                disabled=not _ev.is_valid_email(v_email))
-
-    if send_clicked:
-        ok, msg = _ev.send_code(v_email)
-        if ok:
-            st.success(msg)
-            st.session_state["_code_sent"] = True
-        else:
-            st.error(msg)
-
-    if st.session_state.get("_code_sent"):
-        v_code = st.text_input("6 位验证码", key="verify_code", max_chars=6,
-                               placeholder="123456", label_visibility="collapsed")
-        verify_clicked = st.button("✅ 验证并进入", type="primary", use_container_width=True)
-        if verify_clicked:
-            ok, msg = _ev.verify(v_email, v_code)
-            if ok:
-                st.session_state.verified_email = v_email.strip().lower()
-                # 绑定 client_id (让配额跟账号走)
-                try:
-                    import quota_kv
-                    cid = quota_kv.get_client_id()
-                    if cid:
-                        _ev.bind(v_email, cid)
-                except Exception:
-                    pass
-                st.rerun()
-            else:
-                st.error(msg)
-
-    st.divider()
-    st.caption("🔒 我们只用你的邮箱做配额统计，不会发送任何推广邮件")
-    st.stop()   # ← 未验证, 阻断后续所有功能
-
-# ==================== 邮箱验证门禁结束 ====================
 
 # ---- 模式选择 ----
 # 修复: 之前 st.session_state.mode = st.radio(...) 是双绑定写法
@@ -463,12 +435,13 @@ elif st.session_state.mode == "mm_rag":
         if mm_saved_path is None:
             st.error("❌ 请先上传图片")
         else:
-            # v0.1.23: 限额检查
+            # v0.1.27: 限额检查 (四档)
             from quota import check_can_query, increment_quota
             has_byok = bool(user_ds and user_zp)
             pro_status = st.session_state.get("pro_status", "none")
             is_pro = pro_status == "active"
-            can, reason = check_can_query(has_byok, is_pro)
+            is_verified = bool(st.session_state.get("verified_email"))
+            can, reason = check_can_query(has_byok, is_pro, is_verified)
             if not can:
                 st.error(f"🚫 {reason}")
                 st.stop()
@@ -508,6 +481,9 @@ elif st.session_state.mode == "mm_rag":
                 total_cost = mm_cost + ocr_cost
                 st.session_state.cumulative_cost += total_cost
                 st.session_state.cumulative_queries += 1
+                # v0.1.27: 游客 / 已验证 都计数, BYOK / Pro 不计
+                if not has_byok and not is_pro:
+                    increment_quota()
             except Exception as e:
                 st.error(f"❌ 多模态错误: {type(e).__name__}: {e}")
                 st.stop()
@@ -663,16 +639,16 @@ else:
         st.rerun()
 
     if ask_btn and question.strip():
-        # v0.1.23: 限额检查 (BYOK / Pro 不限, Free 10/天)
+        # v0.1.27: 限额检查 (四档: BYOK 不限 / Pro 100 / 验证 30 / 游客 10)
         from quota import check_can_query, increment_quota, get_quota_status
         has_byok = bool(user_ds and user_zp)
-        # Pro 状态从 session 拿, 没有就当 free
         pro_status = st.session_state.get("pro_status", "none")
         is_pro = pro_status == "active"
-        can, reason = check_can_query(has_byok, is_pro)
+        is_verified = bool(st.session_state.get("verified_email"))
+        can, reason = check_can_query(has_byok, is_pro, is_verified)
         if not can:
             st.error(f"🚫 {reason}")
-            st.info("👆 侧边栏填自己的 API key 或订阅 Pro 继续")
+            st.info("👆 侧边栏可验证邮箱提额 / 订阅 Pro / 填自己的 API Key")
             st.stop()
 
         st.divider()
