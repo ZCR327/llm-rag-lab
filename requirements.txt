@@ -39,6 +39,9 @@ langgraph>=0.2.0
 # Config
 python-dotenv>=1.0.0
 
+# Alipay RSA2 signing (alipay_client.py)
+pycryptodome>=3.20.0
+
 # Eval + data
 pandas>=2.2.0
 numpy>=1.26.0

@@ -1,22 +1,22 @@
 /**
- * Cloudflare Worker — 订阅状态 + Stripe 集成
+ * Cloudflare Worker — 订阅状态 + 支付集成 (Stripe + 支付宝)
  *
  * 端点:
  *   POST  /webhook/stripe         - Stripe webhook (更新 KV)
  *   GET   /sub?email=...          - 查订阅状态 (KV, stale 则查 Stripe)
  *   POST  /create-checkout       - 建 Stripe Checkout session, 返回 URL
  *   POST  /create-portal         - 建 Stripe Customer Portal session
+ *   POST  /alipay/sign           - 支付宝签约/支付
+ *   GET   /alipay/query          - 支付宝订单查询
+ *   POST  /alipay/notify         - 支付宝异步通知 (验签 + 更新 KV)
  *
- * 环境变量 (Cloudflare Dashboard 或 wrangler.toml):
- *   STRIPE_SECRET_KEY        - sk_live_... 或 sk_test_...
- *   STRIPE_WEBHOOK_SECRET    - whsec_...  (用来验签 webhook)
- *   PRICE_ID_PRO             - price_...  (Pro 月费价格 ID)
- *
- * 部署:
- *   npx wrangler deploy
- *   # 然后 Dashboard 里绑 KV namespace:  wrangler kv:namespace create SUB
- *   # wrangler kv:namespace bind SUB --binding SUB
+ * 环境变量 (wrangler secret put):
+ *   Stripe:  STRIPE_SECRET_KEY / STRIPE_WEBHOOK_SECRET / PRICE_ID_PRO
+ *   支付宝:  ALIPAY_APP_ID / ALIPAY_PRIVATE_KEY / ALIPAY_PUBLIC_KEY
+ *            ALIPAY_SELLER_ID / ALIPAY_NOTIFY_URL
  */
+
+import { handleAlipaySign, handleAlipayQuery, handleAlipayNotify } from "./alipay.js";
 
 export default {
   async fetch(req, env, ctx) {
@@ -44,6 +44,18 @@ export default {
       if (url.pathname === "/create-portal" && req.method === "POST") {
         return await handleCreatePortal(req, env, corsHeaders);
       }
+
+      // ---- 支付宝 ----
+      if (url.pathname === "/alipay/sign" && req.method === "POST") {
+        return await handleAlipaySign(req, env);
+      }
+      if (url.pathname === "/alipay/query" && req.method === "GET") {
+        return await handleAlipayQuery(req, env, url);
+      }
+      if (url.pathname === "/alipay/notify" && req.method === "POST") {
+        return await handleAlipayNotify(req, env);
+      }
+
       return json({ error: "not found" }, 404, corsHeaders);
     } catch (e) {
       return json({ error: e.message, type: e.name }, 500, corsHeaders);

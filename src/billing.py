@@ -63,3 +63,35 @@ def create_portal(customer_id: str, return_url: str = None) -> str:
         return data.get("url", "")
     except Exception as e:
         return f"(error: {e})"
+
+
+# ============ 支付宝 ============
+
+def alipay_sign(email: str, out_trade_no: str, return_url: str = None) -> dict:
+    """发起支付宝支付/签约. 返回 {status, form, order_id} 或 {error}.
+
+    form 是支付宝 SDK 表单字符串 (SDK 模式), 需前端 JS 提交.
+    """
+    if not WORKER_URL:
+        return {"error": "BILLING_WORKER_URL 未配置"}
+    body = {"email": email, "out_trade_no": out_trade_no, "subject": "RAG Lab Pro 订阅 (¥5/月)"}
+    if return_url:
+        body["return_url"] = return_url
+    try:
+        r = httpx.post(f"{WORKER_URL}/alipay/sign", json=body, timeout=20.0)
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def alipay_query(out_trade_no: str) -> dict:
+    """查支付宝订单状态 (异步通知丢失时兜底)."""
+    if not WORKER_URL:
+        return {"error": "BILLING_WORKER_URL 未配置"}
+    try:
+        r = httpx.get(f"{WORKER_URL}/alipay/query", params={"out_trade_no": out_trade_no}, timeout=20.0)
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        return {"error": str(e)}
