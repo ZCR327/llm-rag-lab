@@ -2,13 +2,12 @@ name = "rag-lab-billing"
 main = "worker.js"
 compatibility_date = "2024-09-01"
 
-# KV 命名空间: 存订阅状态
-# 创建命令: wrangler kv:namespace create SUB
-# 然后把 id 填到下面
-# [[kv_namespaces]]
-# binding = "SUB"
-# id = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-# preview_id = "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
+# KV 命名空间: 存订阅状态 + 配额 + 邮箱验证码
+# 创建命令 (wrangler 4.x 新语法, 注意是空格不是冒号):
+#   npx wrangler kv namespace create SUB
+[[kv_namespaces]]
+binding = "SUB"
+id = "759ef00019f244cfa1776bb28bcecd43"
 
 # 环境变量 (Stripe 密钥, 不要 commit 真 key)
 # 用 wrangler secret put 设, 不会写进 git:

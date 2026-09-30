@@ -129,6 +129,10 @@ export async function handleSendCode(req, env) {
   if (!email || !isValidEmail(email)) {
     return json({ error: "邮箱格式不对" }, 400);
   }
+  // 阿里云没配就别白跑一趟 (省 KV 写入, 也给前端明确提示)
+  if (!env.ALIDM_ACCESS_KEY_ID || !env.ALIDM_ACCESS_KEY_SECRET || !env.ALIDM_FROM) {
+    return json({ error: "邮件服务未配置 (需设置 ALIDM_* secrets)" }, 503);
+  }
   const mail = email.toLowerCase();
 
   // 已经验证过就不用再发
@@ -173,21 +177,39 @@ export async function handleSendCode(req, env) {
       <p style="color:#999;font-size:12px">RAG Lab — 本地文档 RAG + 多模态 OCR + Web Agent</p>
     </div>`;
 
-  const resp = await callAliyun(env, "SingleSendMail", "2015-11-23", {
-    AccountName: env.ALIDM_FROM,
-    FromAlias: fromName,
-    AddressType: "1",
-    ReplyToAddress: "false",
-    ToAddress: mail,
-    Subject: `【RAG Lab】邮箱验证码: ${code}`,
-    HtmlBody: htmlBody,
-    TextBody: `你的验证码是 ${code}, 10 分钟内有效.`,
-  });
+  // 发邮件 (失败要回滚已存的验证码, 否则脏数据留在 KV)
+  let resp;
+  try {
+    resp = await callAliyun(env, "SingleSendMail", "2015-11-23", {
+      AccountName: env.ALIDM_FROM,
+      FromAlias: fromName,
+      AddressType: "1",
+      ReplyToAddress: "false",
+      ToAddress: mail,
+      Subject: `【RAG Lab】邮箱验证码: ${code}`,
+      HtmlBody: htmlBody,
+      TextBody: `你的验证码是 ${code}, 10 分钟内有效.`,
+    });
+  } catch (e) {
+    // 网络异常 / 阿里云接口炸了 — 清掉验证码和频率计数, 避免脏数据
+    await env.SUB.delete(emailKey("code", mail));
+    log.count -= 1;
+    await env.SUB.put(logKey, JSON.stringify(log), { expirationTtl: 3600 });
+    return json({ error: `邮件服务请求异常: ${e.message}` }, 502);
+  }
 
   if (resp.error) {
-    return json({ error: `发送失败: ${resp.error}`, detail: resp.Message || resp.Code }, 500);
+    // 没配 AccessKey / From — 清脏数据 + 返可读错误
+    await env.SUB.delete(emailKey("code", mail));
+    log.count -= 1;
+    await env.SUB.put(logKey, JSON.stringify(log), { expirationTtl: 3600 });
+    return json({ error: resp.error }, 503);
   }
   if (resp.Code && resp.Code !== "OK") {
+    // 阿里云返回业务错误 (如 InvalidAccountName) — 也清掉验证码
+    await env.SUB.delete(emailKey("code", mail));
+    log.count -= 1;
+    await env.SUB.put(logKey, JSON.stringify(log), { expirationTtl: 3600 });
     return json({ error: `发送失败: ${resp.Message}`, code: resp.Code }, 400);
   }
 
