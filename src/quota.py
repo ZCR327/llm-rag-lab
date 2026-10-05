@@ -183,6 +183,23 @@ def increment_quota():
     _add_count()
 
 
+def _probe_kv() -> bool:
+    """真实探测 Worker KV 是否可达 (不是只看 secret 配没配).
+
+    之前 storage 判定只看 quota_kv.is_enabled() (= BILLING_WORKER_URL 非空),
+    结果 Worker 不可达时依然显示"已锁定", 但实际在用 session 计数 (静默降级).
+    现在发一个真实请求确认连通.
+    """
+    try:
+        import quota_kv
+        if not quota_kv.is_enabled():
+            return False
+        # 探针用独立 key (不加计数), 拿到 -1 说明请求失败
+        return quota_kv.get_count("__probe__") >= 0
+    except Exception:
+        return False
+
+
 def get_quota_status(has_byok: bool = False, is_pro: bool = False, is_verified: bool = False) -> dict:
     """返回 quota 当前状态 (给 UI 显示)."""
     init_quota_state()
@@ -190,16 +207,14 @@ def get_quota_status(has_byok: bool = False, is_pro: bool = False, is_verified: 
     tier = resolve_tier(has_byok, is_pro, is_verified)
     limit = get_daily_limit(tier)
     count = _get_count()
-    # 标识当前用的是哪种存储 (UI 上提示用户)
-    storage = "session"
-    try:
-        import quota_kv
-        if quota_kv.is_enabled():
-            key = get_quota_key()
-            if key:
-                storage = "account" if key.startswith("u:") else "kv"
-    except Exception:
-        pass
+
+    # 真实探测 Worker 可达性 (v0.1.28: 修复"假锁定"显示)
+    kv_reachable = _probe_kv()
+    if kv_reachable:
+        key = get_quota_key()
+        storage = "account" if key.startswith("u:") else "kv"
+    else:
+        storage = "session"
     return {
         "date": str(st.session_state.quota_date),
         "count": count,

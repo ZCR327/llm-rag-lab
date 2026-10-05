@@ -303,15 +303,24 @@ TOP_K_PER_QUERY={int(os.getenv('TOP_K_PER_QUERY', '8'))}""", language="bash")
         st.caption("🔒 只用于配额统计, 不发推广邮件")
 
     # 配额锁定方式提示 (邮箱 / IP+指纹 / 内存)
+    # v0.1.28: storage 现在是真实探测结果, 不是"secret 配了就认为通了"
     try:
         import quota_kv
         if qs['storage'] == "account":
-            st.caption(f"🔒 配额已绑定邮箱 `{st.session_state.get('verified_email', '')}` — 换设备不会丢")
+            st.caption(f"✅ 配额已绑定邮箱 `{st.session_state.get('verified_email', '')}` — 换设备不会丢")
         elif qs['storage'] == "kv":
             ip = quota_kv.get_user_ip()
-            st.caption(f"🔒 已按 IP+浏览器指纹锁定 ({ip}) — 刷新不会重置")
+            st.caption(f"✅ Worker KV 已连通, 按 IP+指纹锁定 ({ip}) — 刷新不会重置")
         else:
-            st.caption("⚠️ 配额存在内存, 刷新会重置 (配置 BILLING_WORKER_URL 可持久化)")
+            try:
+                from billing import WORKER_URL
+                if WORKER_URL:
+                    st.error(f"❌ 配了 `BILLING_WORKER_URL` 但连不上 Worker: {WORKER_URL}")
+                    st.caption("可能是 Worker 被墙 / 域名失效 / 部署失败. 配额暂存在内存, 刷新会重置.")
+                else:
+                    st.caption("⚠️ 配额存在内存, 刷新会重置 (配置 BILLING_WORKER_URL 可持久化)")
+            except Exception:
+                st.caption("⚠️ 配额存在内存, 刷新会重置")
     except Exception:
         pass
 
