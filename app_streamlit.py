@@ -141,6 +141,13 @@ idx, llm, qa, qa_stream = load_rag()
 ocr_func = load_ocr()
 n_docs = len(list((Path(__file__).parent / "data" / "raw").iterdir()))
 
+# v0.1.28: 邮箱验证客户端 (必须在侧边栏使用 _ev 之前 import)
+# 之前 import 写在侧边栏之后, 侧边栏先跑 → NameError: _ev is not defined
+import email_verify as _ev
+
+if "verified_email" not in st.session_state:
+    st.session_state.verified_email = None
+
 st.sidebar.success(f"✅ {n_docs} 文档就绪 (385 chunks)")
 
 # ---- 侧边栏 ----
@@ -327,7 +334,7 @@ TOP_K_PER_QUERY={int(os.getenv('TOP_K_PER_QUERY', '8'))}""", language="bash")
 # v0.1.27: 邮箱验证改为「可选升级」而非强制门禁.
 # 游客直接用 (10 次/天), 验证邮箱提到 30 次/天, Pro 100 次/天, BYOK 不限.
 # UI 在侧边栏, 见下方 '📮 验证邮箱' 区块.
-import email_verify as _ev
+# 注意: _ev 必须在侧边栏 (line ~271) 使用之前 import, 否则 NameError.
 
 if "verified_email" not in st.session_state:
     st.session_state.verified_email = None
