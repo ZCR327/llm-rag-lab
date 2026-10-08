@@ -61,3 +61,8 @@ htmlcov/
 *.bak
 *.tmp
 *.orig
+
+# Cloudflare Wrangler local cache / dev state
+.wrangler/
+.dev.vars
+cloudflare/.wrangler/
