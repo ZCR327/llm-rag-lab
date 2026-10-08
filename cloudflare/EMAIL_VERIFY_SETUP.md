@@ -48,22 +48,25 @@
 
 ## 四、部署 Worker
 
+> ✅ **KV 已经建好了**（2026-10-05，`759ef00019f244cfa1776bb28bcecd43`，已绑定在 wrangler.toml）。
+> Worker 也已经部署到 `https://rag-lab-billing.3767424179.workers.dev`，KV 读写实测通过。
+> **下面只需设置 3 个阿里云 secret，不用重新建 KV、不用改 wrangler.toml。**
+
 ```bash
 cd D:\.minimax\.minimax\projects\llm-rag-lab\cloudflare
 
-# KV (跟订阅/配额共用同一个 SUB namespace)
-wrangler kv:namespace create SUB
-# 把 id 填到 wrangler.toml
-
-# 邮件服务 secrets
-wrangler secret put ALIDM_ACCESS_KEY_ID      # LTAI... (阿里云)
-wrangler secret put ALIDM_ACCESS_KEY_SECRET  # 你的 Secret
+# 邮件服务 secrets (交互式粘贴, 不回显)
+wrangler secret put ALIDM_ACCESS_KEY_ID      # LTAI... (阿里云子账号)
+wrangler secret put ALIDM_ACCESS_KEY_SECRET  # 你的 Secret (只显示一次, 趁现在抄下来)
 wrangler secret put ALIDM_FROM               # 你的发信地址, 如 no-reply@yourdomain.com
 wrangler secret put ALIDM_FROM_NAME          # RAG Lab (可选)
 
-# 部署
+# 重新部署让 secrets 生效
 wrangler deploy
 ```
+
+> **wrangler 4.x 语法提醒**：`wrangler kv namespace create SUB`（空格），
+> 不是 `wrangler kv:namespace create SUB`（冒号，4.x 已移除该别名）。
 
 ---
 
